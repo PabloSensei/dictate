@@ -5,7 +5,7 @@
 //!   dictate-bench file <audio.wav> <model.bin>    transcribe one file
 //!   dictate-bench bubble <out.bmp>                render bubble frames (light + dark)
 //!   dictate-bench demo <dir> [0xRRGGBB]           frames of the README animation
-//! Options: --prompt "<terms>"  --beam N  --lang en  --vad <silero.bin>  --cpu
+//! Options: --prompt "<terms>"  --beam N  --lang en  --vad <silero.bin>  --threads N  --cpu
 //! Env: DICTATE_NO_VAD=1, DICTATE_PREVIEW=1 (simulate live preview), DICTATE_DEBUG=1
 
 use std::io::{BufRead, Write};
@@ -48,6 +48,7 @@ fn parse_args() -> Result<Opts, String> {
             "--lang" => cfg.language = val("--lang")?,
             "--vad" => cfg.vad_model = Some(PathBuf::from(val("--vad")?)),
             "--cpu" => cfg.use_gpu = false,
+            "--threads" => cfg.threads = val("--threads")?.parse().map_err(|_| "--threads: a number expected")?,
             _ => pos.push(a),
         }
     }
@@ -69,7 +70,7 @@ fn real_main() -> Result<(), String> {
             let bg = o.pos.get(2).map(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16)).transpose().map_err(|e| e.to_string())?;
             demo_frames(Path::new(&o.pos[1]), bg.unwrap_or(0x1E1E20))
         }
-        _ => Err("usage:\n  dictate-bench record <dir> <phrases.txt>\n  dictate-bench run <dir> <model.bin>...\n  dictate-bench file <audio.wav> <model.bin>\n  dictate-bench bubble <out.bmp>\noptions: --prompt \"...\" --beam N --lang en --vad <silero.bin> --cpu".into()),
+        _ => Err("usage:\n  dictate-bench record <dir> <phrases.txt>\n  dictate-bench run <dir> <model.bin>...\n  dictate-bench file <audio.wav> <model.bin>\n  dictate-bench bubble <out.bmp>\noptions: --prompt \"...\" --beam N --lang en --vad <silero.bin> --threads N --cpu".into()),
     }
 }
 

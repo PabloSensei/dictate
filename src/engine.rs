@@ -51,7 +51,7 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
 
 fn check_file(path: &Path, sha: Option<&String>, what: &str) -> Result<String, String> {
     if !path.is_file() {
-        return Err(format!("{what} not found: {}\nRun download-models.ps1 or fix the path in dictate.ini.", path.display()));
+        return Err(format!("{what} not found: {}\nRun download-models.cmd or fix the path in dictate.ini.", path.display()));
     }
     if let Some(expected) = sha {
         let got = sha256_file(path)?;

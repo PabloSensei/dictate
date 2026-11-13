@@ -1,0 +1,25 @@
+dictate includes or links the following third-party software.
+
+whisper.cpp and ggml (statically linked)
+  https://github.com/ggml-org/whisper.cpp
+  MIT License, Copyright (c) 2023-2024 The ggml authors
+
+whisper-rs (Rust bindings, statically linked)
+  https://codeberg.org/tazz4843/whisper-rs
+  Unlicense
+
+windows-sys, sha2 and other Rust crates (statically linked)
+  MIT or Apache-2.0, see each crate on https://crates.io
+
+NVIDIA cuBLAS (cublas64_*.dll, cublasLt64_*.dll; cuda zip only)
+  Redistributed under the NVIDIA CUDA Toolkit End User License Agreement,
+  https://docs.nvidia.com/cuda/eula/
+  Copyright (c) NVIDIA Corporation. All rights reserved.
+
+Microsoft Visual C++ Runtime (vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll)
+  Redistributed under the Microsoft Visual Studio license terms for
+  distributable code. Copyright (c) Microsoft Corporation.
+
+Models (downloaded separately by download-models.cmd, not included)
+  Whisper large-v3-turbo by OpenAI, MIT License, https://github.com/openai/whisper
+  Silero VAD, MIT License, https://github.com/snakers4/silero-vad

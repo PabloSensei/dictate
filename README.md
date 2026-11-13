@@ -8,12 +8,13 @@
 Hold a key, speak, let go: the text is typed into whatever app you're in.<br>
 Whisper runs on your own GPU. Nothing ever leaves your computer.
 
-<a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-<img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4">
-<img alt="Rust 2024" src="https://img.shields.io/badge/rust-2024%20edition-B7410E?logo=rust&logoColor=white">
-<img alt="whisper.cpp" src="https://img.shields.io/badge/engine-whisper.cpp-555">
+<a href="https://github.com/PabloSensei/dictate/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/PabloSensei/dictate?label=release&color=FF453A"></a>
+<a href="https://github.com/PabloSensei/dictate/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/PabloSensei/dictate/total?color=FF453A"></a>
+<a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1F1F23"></a>
+<img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-1F1F23">
 <img alt="Network access: none" src="https://img.shields.io/badge/network-none-2EA44F">
 
+<a href="https://github.com/PabloSensei/dictate/releases/latest"><b>Download</b></a> •
 [Features](#features) •
 [Quick start](#quick-start) •
 [Usage](#usage) •
@@ -71,45 +72,43 @@ Electron bundles you have to take on trust. **dictate** is a small native Window
   </picture>
 </p>
 
-## Requirements
+## Quick start
+
+**1. Download** the zip for your hardware from
+[**Releases**](https://github.com/PabloSensei/dictate/releases/latest) and unpack it anywhere,
+for example to `%LOCALAPPDATA%\Programs\dictate`. There is no installer: settings and models
+stay inside that folder. Every zip has a `.sha256` file next to it.
+
+| Download | For | Model | Time per phrase |
+|---|---|---|---|
+| `dictate-…-windows-x64-cuda.zip` (580 MB) | NVIDIA GeForce RTX 20 series or newer, driver 580+ | large-v3-turbo | ~0.2 s |
+| `dictate-…-windows-x64-cpu.zip` (2 MB) | Any x64 CPU with AVX2, no GPU needed | small | 2–5 s |
+
+Most of the CUDA zip is NVIDIA's cuBLAS library, which the GPU build needs.
+
+**2. Get the models.** Double-click `download-models.cmd`. It downloads the Whisper model
+for your zip and the Silero voice activity detector from Hugging Face, and checks their
+SHA-256.
+
+**3. Run `dictate.exe`**, click into any text field, hold **Right Ctrl**, speak, and release.
+
+> [!NOTE]
+> The exe isn't code-signed yet, so SmartScreen may warn about an unknown publisher on
+> the first run. Click **More info**, then **Run anyway**. You can also
+> [build it yourself](#building-from-source) from this source.
+
+> [!TIP]
+> Left-click the tray icon to open the settings, where you can pick another key or your
+> language. Setting the speech language explicitly is more reliable than auto-detection on
+> short phrases.
+
+### Requirements
 
 | | Requirement |
 |---|---|
 | **OS** | Windows 10 or 11, 64-bit |
-| **GPU** | NVIDIA with CUDA and about 2 GB of free VRAM (recommended). A CPU-only build also works, just slower. |
-| **Disk** | 1.6 GB for the default model |
-| **To build** | Rust, Visual Studio Build Tools (C++), CUDA Toolkit 12 or 13, LLVM (libclang) |
-
-There are no prebuilt binaries yet, so for now you build it yourself. The first build
-takes a while because it compiles the CUDA kernels; rebuilds take seconds.
-
-## Quick start
-
-Run these commands in **PowerShell** from the repository folder.
-
-**1. Install the build tools** (skip any you already have):
-
-```powershell
-winget install Rustlang.Rustup
-winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-winget install Nvidia.CUDA
-winget install LLVM.LLVM
-```
-
-**2. Build, install, and download the models:**
-
-```powershell
-.\build.ps1             # release build (CUDA)
-.\install.ps1           # copies to %LOCALAPPDATA%\Programs\dictate and starts it
-.\download-models.ps1   # Whisper large-v3-turbo (1.6 GB) + Silero VAD, SHA-256 checked
-```
-
-**3. Dictate.** Click into any text field, hold **Right Ctrl**, speak, and release.
-
-> [!TIP]
-> Right-click the tray icon, then choose **Settings…** to pick another key or your
-> language. Setting the speech language explicitly is more reliable than auto-detection on
-> short phrases.
+| **GPU** | NVIDIA RTX 20 series or newer with about 2 GB of free VRAM (recommended). The CPU build works without one, just slower and with a smaller model. |
+| **Disk** | CUDA build: 0.8 GB unpacked + 1.6 GB model. CPU build: 5 MB + 0.5 GB model. |
 
 ## Usage
 
@@ -182,7 +181,7 @@ dictate was written for people who would rather not trust a dictation app blindl
 
 - **No network code.** The exe imports only audio (`winmm`), windowing (`user32`, `gdi32`,
   `dwmapi`, `shell32`), and CUDA. `dumpbin /imports` shows no `ws2_32`, `wininet`, or
-  `winhttp`. The only download is `download-models.ps1`, a short script you run yourself.
+  `winhttp`. The only download is `download-models.cmd`, a short script you run yourself.
 - **The microphone is open only while you dictate**, so the Windows microphone indicator is
   lit only then. Audio stays in memory and is never written to disk.
 - **No keyboard hook.** One key is polled with `GetAsyncKeyState`. Text is typed with
@@ -234,24 +233,41 @@ with `tools/convert_hf_to_ggml.py`.
 
 ## Building from source
 
-`build.ps1` loads the MSVC developer environment, finds libclang, and runs
-`cargo <command> --release`:
+You need Rust, Visual Studio Build Tools (C++), CUDA Toolkit 12 or 13 (only for the CUDA
+build), and LLVM for libclang. In **PowerShell**:
 
 ```powershell
-.\build.ps1                               # dictate.exe + dictate-bench.exe
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install Nvidia.CUDA
+winget install LLVM.LLVM
+```
+
+`build.ps1` loads the MSVC developer environment, finds libclang, and runs
+`cargo <command> --release`. Run these from the repository folder:
+
+```powershell
+.\build.ps1                               # dictate.exe + dictate-bench.exe, CUDA for this PC's GPU
+.\build.ps1 build --no-default-features   # CPU-only: no CUDA Toolkit needed
 .\build.ps1 test                          # unit tests
 .\build.ps1 clippy --all-targets
-.\build.ps1 build --no-default-features   # CPU-only: no CUDA Toolkit needed
+.\install.ps1                             # copy to %LOCALAPPDATA%\Programs\dictate and start
+.\download-models.ps1                     # models for that installed copy
+.\package.ps1                             # the portable release zips (CUDA + CPU)
 ```
+
+The first build takes a while because it compiles the CUDA kernels; rebuilds take seconds.
 
 <details>
 <summary><b>Build details</b></summary>
 
 <br>
 
-- **CUDA architectures.** The build compiles kernels for the GPU in your PC
-  (`CMAKE_CUDA_ARCHITECTURES = "native"` in `.cargo/config.toml`). To build for other GPUs,
-  set the variable first, e.g. `$env:CMAKE_CUDA_ARCHITECTURES = "75;86;89;120"`.
+- **CUDA architectures.** `build.ps1` compiles kernels only for the GPU in your PC
+  (`CMAKE_CUDA_ARCHITECTURES = "native"` in `.cargo/config.toml`), and ggml's CPU code for
+  your CPU. `package.ps1` builds portable binaries instead: AVX2 CPU code, kernels for
+  Turing, Ampere, Ada, and Blackwell plus PTX for newer GPUs, and it ships cuBLAS and the
+  MSVC runtime next to the exe.
 - **libclang.** bindgen regenerates whisper.cpp's bindings on Windows, because the ones
   bundled with `whisper-rs-sys` are generated on Linux and have the wrong struct layouts.
   `build.ps1` looks in `%ProgramFiles%\LLVM\bin` and in Visual Studio's LLVM component, or
@@ -304,7 +320,7 @@ That app probably runs as administrator; see the note under
 <br>
 
 Something failed at startup, most often a missing model or a checksum mismatch. Hover over
-the icon or open **Log** from the tray menu. `.\download-models.ps1` fetches the default
+the icon or open **Log** from the tray menu. `download-models.cmd` fetches the default
 models again.
 </details>
 

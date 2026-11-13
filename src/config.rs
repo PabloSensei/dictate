@@ -9,7 +9,7 @@ pub const TEMPLATE: &str = r#"# dictate: offline push-to-talk dictation. Restart
 
 # Whisper model in whisper.cpp GGML format. Its SHA-256 is checked on every start;
 # leave model_sha256 empty to skip the check (e.g. for your own fine-tune).
-# download-models.ps1 fetches this one from Hugging Face (ggerganov/whisper.cpp).
+# download-models.cmd fetches it from Hugging Face (ggerganov/whisper.cpp).
 model = models\ggml-large-v3-turbo.bin
 model_sha256 = 1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69
 
@@ -60,6 +60,28 @@ live_preview = true
 ui_language = auto
 "#;
 
+/// Model and threads that suit a CPU-only build: large-v3-turbo takes ~12 s per phrase
+/// on an 8-core CPU, small takes 2-5 s.
+const CPU_DEFAULTS: [(&str, &str); 3] = [
+    ("model = models\\ggml-large-v3-turbo.bin", "model = models\\ggml-small.bin"),
+    (
+        "model_sha256 = 1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        "model_sha256 = 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    ),
+    ("threads = 4", "threads = 8"),
+];
+
+/// The default dictate.ini for this build (the CPU-only build gets a smaller model).
+pub fn template() -> String {
+    let mut t = TEMPLATE.to_string();
+    if !cfg!(feature = "cuda") {
+        for (from, to) in CPU_DEFAULTS {
+            t = t.replace(from, to);
+        }
+    }
+    t
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Hold,
@@ -108,7 +130,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        parse(TEMPLATE).expect("template parses")
+        parse(&template()).expect("template parses")
     }
 }
 
@@ -135,7 +157,7 @@ pub fn path_next_to_exe() -> PathBuf {
 /// Loads the config, creating it from the template on first run.
 pub fn load_or_create(path: &Path) -> Result<Config, String> {
     if !path.exists() {
-        std::fs::write(path, TEMPLATE.replace('\n', "\r\n"))
+        std::fs::write(path, template().replace('\n', "\r\n"))
             .map_err(|e| format!("can't create {}: {e}", path.display()))?;
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -305,7 +327,7 @@ pub fn parse_key(v: &str) -> Option<i32> {
 /// Rewrites `key = value` lines in place (first uncommented occurrence), keeping
 /// comments, order and other keys; missing keys are appended. Values are single-line.
 pub fn save(path: &Path, updates: &[(&str, String)]) -> Result<(), String> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|_| TEMPLATE.to_string());
+    let text = std::fs::read_to_string(path).unwrap_or_else(|_| template());
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     for (key, value) in updates {
         let value = value.replace(['\r', '\n'], " ");
@@ -340,8 +362,17 @@ mod tests {
         assert!(c.replace.is_empty() && c.prompt.is_empty());
         let mut r = c.clone();
         r.resolve_paths(Path::new(r"C:\apps\dictate"));
-        assert_eq!(r.model, Path::new(r"C:\apps\dictate\models\ggml-large-v3-turbo.bin"));
+        assert!(r.model.starts_with(r"C:\apps\dictate\models") && r.model.extension().is_some_and(|e| e == "bin"));
         assert!(r.vad_model.is_some_and(|v| v.is_absolute()));
+    }
+
+    #[test]
+    fn cpu_defaults_apply_to_the_template() {
+        for (from, to) in CPU_DEFAULTS {
+            assert_eq!(TEMPLATE.matches(from).count(), 1, "{from}");
+            let t = TEMPLATE.replace(from, to);
+            assert!(parse(&t).is_ok(), "{to}");
+        }
     }
 
     #[test]
