@@ -1,0 +1,7 @@
+/target
+# local runtime files: settings, models, recordings, benchmark results
+dictate.ini
+*.bin
+*.wav
+results-*.tsv
+*.part

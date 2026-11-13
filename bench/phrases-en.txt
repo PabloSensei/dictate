@@ -1,0 +1,17 @@
+# Test phrases for comparing models on your own voice: one phrase per line.
+# Replace them with what you actually dictate; that gives the most useful numbers.
+Hi, I'm running a bit late today, I'll be there around eight.
+Could you remind me where we put the documents from last week?
+We need milk, bread, eggs, and something sweet for tea.
+Let's have a call tomorrow after lunch if that works for you.
+Please take a look at my pull request, it only touches the config.
+I started a new container in Docker, but it can't see the database.
+We should upgrade the Kubernetes cluster and check that the pods restarted.
+Rebase this branch on main and then force push it.
+The build failed in GitHub Actions, probably because of the dependency cache.
+Rewrite this function in Rust and add unit tests.
+I think we need WebSockets here instead of REST so updates arrive instantly.
+Check the logs in Grafana, latency has been growing since the morning.
+Set up Postgres in Docker Compose and expose port five four three two.
+Tomorrow at ten we have the stand-up, and the retro right after it.
+Send me the Figma link and I'll review the design tonight.
