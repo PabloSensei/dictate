@@ -281,7 +281,7 @@ The first build takes a while because it compiles the CUDA kernels; rebuilds tak
 <br>
 
 - **CUDA architectures.** `build.ps1` compiles kernels only for the GPU in your PC
-  (`CMAKE_CUDA_ARCHITECTURES = "native"` in `.cargo/config.toml`), and ggml's CPU code for
+  (`CMAKE_CUDA_ARCHITECTURES = "native"`), and ggml's CPU code for
   your CPU. `package.ps1` builds portable binaries instead: AVX2 CPU code, kernels for
   Turing, Ampere, Ada, and Blackwell plus PTX for newer GPUs, and it ships cuBLAS and the
   MSVC runtime next to the exe.

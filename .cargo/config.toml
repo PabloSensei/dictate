@@ -1,11 +1,6 @@
-[env]
-# Ninja + MSVC from the VS developer environment (see build.ps1).
-CMAKE_GENERATOR = "Ninja"
-# GPU architectures to compile the CUDA kernels for. "native" = the GPU in this PC,
-# which keeps the build fast. For a build that runs on other GPUs, override it, e.g.
-#   $env:CMAKE_CUDA_ARCHITECTURES = "75;86;89;120"
-# LIBCLANG_PATH (needed by bindgen) is found by build.ps1 or taken from the environment.
-CMAKE_CUDA_ARCHITECTURES = "native"
+# Build settings shared by every platform. Windows-specific CMake settings (Ninja,
+# CUDA architectures) are set by build.ps1 and package.ps1, so they don't leak into
+# macOS and Linux builds.
 
 [profile.release]
 lto = "thin"

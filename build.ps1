@@ -44,6 +44,11 @@ if (-not $env:LIBCLANG_PATH) {
     $env:LIBCLANG_PATH = $found
 }
 
+# Ninja with MSVC from the developer environment above. CUDA kernels only for the GPU in
+# this PC unless the caller (package.ps1) picked architectures.
+$env:CMAKE_GENERATOR = "Ninja"
+if ($cuda -and -not $env:CMAKE_CUDA_ARCHITECTURES) { $env:CMAKE_CUDA_ARCHITECTURES = "native" }
+
 Push-Location $PSScriptRoot
 try {
     cargo $cmd --release @rest
