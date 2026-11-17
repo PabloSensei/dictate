@@ -1,6 +1,6 @@
 [package]
 name = "dictate"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 edition = "2024"
 description = "Private, offline push-to-talk dictation for Windows, macOS and Linux, powered by whisper.cpp"
 license = "MIT"
@@ -32,6 +32,10 @@ ksni = { version = "0.3", default-features = false, features = ["blocking", "asy
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-quartz-core = "0.3"
+dispatch2 = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

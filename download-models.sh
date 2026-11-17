@@ -60,3 +60,8 @@ fetch "$whisper" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$whi
 fetch ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin \
     2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
 echo "Models are in $dir"
+if [ "$model" = turbo ]; then
+    echo "To use it, set these two lines in dictate.ini and restart dictate:"
+    echo "  model = $dir/$whisper"
+    echo "  model_sha256 = $whisper_sha"
+fi

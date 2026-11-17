@@ -1,0 +1,119 @@
+# macOS and Linux builds with tests. Windows builds come from package.ps1 (CUDA).
+name: build
+
+on:
+  push:
+    branches: [main, port]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    # the oldest supported runner, so the binary runs on older glibc too
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libclang-dev \
+            xvfb xdotool xautomation x11-utils imagemagick espeak-ng sox
+      - name: Rust
+        run: rustup update stable && rustup default stable && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --release --no-default-features --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --release --no-default-features
+      - name: Package
+        run: tools/package-linux.sh
+      - name: Models (cached)
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/dictate/models
+          key: models-small-silero-6.2.0
+      - name: Download models
+        run: ./download-models.sh
+      - name: End-to-end test on Xvfb
+        run: |
+          espeak-ng -v en-us -s 140 -w /tmp/speech.wav "Hello world. This is a dictation test on Linux."
+          sox /tmp/speech.wav -r 16000 -c 1 -b 16 /tmp/speech16.wav
+          tools/e2e-x11.sh target/release/dictate /tmp/speech16.wav e2e-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-x86_64
+          path: |
+            dist-out/*.tar.gz
+            dist-out/*.sha256
+            e2e-out/
+          if-no-files-found: warn
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+      - name: Clippy
+        run: cargo clippy --release --no-default-features --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --release --no-default-features
+      - name: Package
+        run: tools/package-macos.sh
+      - name: Models (cached)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Application Support/dictate/models
+          key: models-small-silero-6.2.0
+      - name: Download models
+        run: ./download-models.sh
+      - name: Transcribe a test phrase (whisper.cpp build check)
+        run: |
+          say -o /tmp/speech.aiff "Hello world. This is a dictation test on a Mac."
+          afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/speech.aiff /tmp/speech.wav
+          m="$HOME/Library/Application Support/dictate/models"
+          dist-out/dictate-bench-macos-${{ matrix.arch }} file /tmp/speech.wav "$m/ggml-small.bin" \
+            --vad "$m/ggml-silero-v6.2.0.bin" | tee e2e-bench.txt
+          grep -qi "test" e2e-bench.txt
+      - name: Launch the app
+        run: |
+          mkdir -p e2e-out
+          mv e2e-bench.txt e2e-out/
+          rm -rf /Applications/Dictate.app && cp -R dist-out/Dictate.app /Applications/
+          open /Applications/Dictate.app
+          for i in $(seq 60); do
+            grep -q "model loaded" "$HOME/Library/Application Support/dictate/dictate.log" 2>/dev/null && break
+            sleep 1
+          done
+          sleep 3
+          screencapture -x e2e-out/screen.png || true
+          cp "$HOME/Library/Application Support/dictate/dictate.log" e2e-out/ || true
+          cat e2e-out/dictate.log
+          pgrep -x dictate
+          grep -q "model loaded" e2e-out/dictate.log
+          /Applications/Dictate.app/Contents/MacOS/dictate --quit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            dist-out/*.zip
+            dist-out/*.sha256
+            e2e-out/
+          if-no-files-found: warn

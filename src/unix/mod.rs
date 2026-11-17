@@ -94,6 +94,7 @@ pub fn command_line(locked: bool) -> Cli {
 }
 
 /// Opens a file or folder with the default app.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn open_path(p: &Path) {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     if let Err(e) = std::process::Command::new(opener).arg(p).spawn() {

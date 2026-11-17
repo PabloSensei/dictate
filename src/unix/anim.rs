@@ -64,6 +64,7 @@ impl Anim {
         }
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn visible(&self) -> bool {
         self.visible
     }
