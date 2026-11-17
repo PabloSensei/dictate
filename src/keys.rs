@@ -1,0 +1,185 @@
+//! Polling the keyboard: is the hotkey down, is any other key down?
+//!
+//! Hotkeys are identified by Windows virtual-key codes everywhere (that is what
+//! dictate.ini stores); each platform maps them to its own key codes.
+//! No hooks and no event taps: the state is sampled every 15 ms.
+
+/// Esc cancels a dictation in toggle mode.
+pub const VK_ESCAPE: i32 = 0x1B;
+
+#[cfg(windows)]
+mod imp {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+
+    pub fn down(vk: i32) -> bool {
+        (unsafe { GetAsyncKeyState(vk) } as u16) & 0x8000 != 0
+    }
+
+    /// Not counted: generic Ctrl/Shift/Alt (they mirror the left/right codes),
+    /// VK_PACKET and the menu mask key (our own SendInput), and for Right Alt the
+    /// left Ctrl that AltGr layouts (Polish...) press along with it.
+    pub fn other_down(hotkey: i32) -> bool {
+        let altgr_ctrl = |k: i32| hotkey == 0xA5 && k == 0xA2;
+        (0x01..=0xFE).any(|k| {
+            k != hotkey
+                && !matches!(k, 0x07 | 0x0A | 0x0B | 0x10..=0x12 | 0xE7 | 0xFF)
+                && k != crate::inject::MASK_VK as i32
+                && !altgr_ctrl(k)
+                && down(k)
+        })
+    }
+
+    pub fn supported(_vk: i32) -> bool {
+        true
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod imp {
+    //! Modifier keys come from the device-dependent bits of the HID flags state
+    //! (left and right are separate); other keys from CGEventSourceKeyState.
+
+    const HID_SYSTEM_STATE: i32 = 1; // kCGEventSourceStateHIDSystemState
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceFlagsState(state: i32) -> u64;
+        fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+    }
+
+    /// Device-dependent modifier bits (NX_DEVICE*KEYMASK).
+    fn modifier_bit(vk: i32) -> Option<u64> {
+        Some(match vk {
+            0xA2 => 0x0000_0001, // left control
+            0xA3 => 0x0000_2000, // right control
+            0xA0 => 0x0000_0002, // left shift
+            0xA1 => 0x0000_0004, // right shift
+            0xA4 => 0x0000_0020, // left option
+            0xA5 => 0x0000_0040, // right option
+            0x5B => 0x0000_0008, // left command
+            0x5C => 0x0000_0010, // right command
+            _ => return None,
+        })
+    }
+    const ALL_MODIFIERS: u64 = 0x2000 | 0x1 | 0x2 | 0x4 | 0x20 | 0x40 | 0x8 | 0x10;
+
+    /// macOS virtual key codes (kVK_*) for the non-modifier keys we accept.
+    fn keycode(vk: i32) -> Option<u16> {
+        const F: [u16; 20] = [
+            0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B, 0x71, 0x6A, 0x40, 0x4F,
+            0x50, 0x5A,
+        ];
+        match vk {
+            0x70..=0x83 => Some(F[(vk - 0x70) as usize]), // F1..F20
+            0x1B => Some(0x35),                           // escape
+            _ => None,
+        }
+    }
+
+    pub fn down(vk: i32) -> bool {
+        if let Some(bit) = modifier_bit(vk) {
+            return unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) } & bit != 0;
+        }
+        keycode(vk).is_some_and(|k| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, k) })
+    }
+
+    pub fn other_down(hotkey: i32) -> bool {
+        let own = modifier_bit(hotkey).unwrap_or(0);
+        if unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) } & ALL_MODIFIERS & !own != 0 {
+            return true;
+        }
+        let own_key = keycode(hotkey);
+        // 0x36..=0x3F are the modifier and fn keys, handled through the flags above
+        (0u16..0x80)
+            .filter(|k| !(0x36..=0x3F).contains(k) && Some(*k) != own_key)
+            .any(|k| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, k) })
+    }
+
+    pub fn supported(vk: i32) -> bool {
+        modifier_bit(vk).is_some() || keycode(vk).is_some()
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod imp {
+    //! X11 only: XQueryKeymap gives the state of every key in one round trip.
+    //! Key codes are the standard evdev ones + 8, the same on every Xorg setup.
+
+    use std::sync::Mutex;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+    use x11rb::rust_connection::RustConnection;
+
+    static CONN: Mutex<Option<RustConnection>> = Mutex::new(None);
+
+    fn keycode(vk: i32) -> Option<u8> {
+        Some(match vk {
+            0xA2 => 37,  // Control_L
+            0xA3 => 105, // Control_R
+            0xA0 => 50,  // Shift_L
+            0xA1 => 62,  // Shift_R
+            0xA4 => 64,  // Alt_L
+            0xA5 => 108, // Alt_R / ISO_Level3_Shift
+            0x5B => 133, // Super_L
+            0x5C => 134, // Super_R
+            0x5D => 135, // Menu
+            0x13 => 127, // Pause
+            0x91 => 78,  // Scroll_Lock
+            0x2D => 118, // Insert
+            0x1B => 9,   // Escape
+            0x70..=0x79 => 67 + (vk - 0x70) as u8, // F1..F10
+            0x7A => 95,  // F11
+            0x7B => 96,  // F12
+            0x7C..=0x87 => 191 + (vk - 0x7C) as u8, // F13..F24
+            _ => return None,
+        })
+    }
+
+    fn keymap() -> Option<[u8; 32]> {
+        let mut g = CONN.lock().ok()?;
+        if g.is_none() {
+            *g = RustConnection::connect(None).ok().map(|(c, _)| c);
+        }
+        let conn = g.as_ref()?;
+        match conn.query_keymap().ok().and_then(|c| c.reply().ok()) {
+            Some(r) => Some(r.keys),
+            None => {
+                *g = None; // reconnect next time
+                None
+            }
+        }
+    }
+
+    fn bit(map: &[u8; 32], code: u8) -> bool {
+        map[(code / 8) as usize] & (1 << (code % 8)) != 0
+    }
+
+    pub fn down(vk: i32) -> bool {
+        match (keycode(vk), keymap()) {
+            (Some(k), Some(m)) => bit(&m, k),
+            _ => false,
+        }
+    }
+
+    pub fn other_down(hotkey: i32) -> bool {
+        let Some(m) = keymap() else { return false };
+        let own = keycode(hotkey);
+        (8u8..=255).any(|k| Some(k) != own && bit(&m, k))
+    }
+
+    pub fn supported(vk: i32) -> bool {
+        keycode(vk).is_some()
+    }
+
+    /// For the UI: whether an X11 display is reachable at all.
+    pub fn available() -> bool {
+        keymap().is_some()
+    }
+
+    #[allow(dead_code)]
+    fn _assert_send(c: &RustConnection) -> impl Connection + '_ {
+        c
+    }
+}
+
+pub use imp::*;

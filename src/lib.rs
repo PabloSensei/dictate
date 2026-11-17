@@ -14,6 +14,7 @@ pub mod history;
 pub mod i18n;
 pub mod paint;
 pub mod inject;
+pub mod keys;
 pub mod log;
 pub mod metrics;
 pub mod replace;

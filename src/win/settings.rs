@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use dictate::config::{self, Config, Mode, Overlay};
@@ -53,7 +53,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 /// The dictation hotkey is ignored while a new key is being captured.
-pub static HOTKEY_PAUSED: AtomicBool = AtomicBool::new(false);
+use crate::app::HOTKEY_PAUSED;
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const EN_SETFOCUS: u32 = 0x0100;
@@ -1103,7 +1103,7 @@ impl St {
     fn history_layout(&mut self) -> Vec<(u64, String, f32)> {
         let q = self.query.to_lowercase();
         let text_w = CARD_W - 2.0 * ROW_PAD;
-        let entries = crate::history().entries();
+        let entries = crate::app::history().entries();
         let shown: Vec<(u64, String, f32)> = entries
             .into_iter()
             .rev()
@@ -1132,10 +1132,10 @@ impl St {
         let total: f32 = rows.iter().map(|r| row_total(r.2)).sum();
         self.max_scroll = (total - list.h).max(0.0);
         self.scroll = self.scroll.clamp(0.0, self.max_scroll);
-        let any = !crate::history().is_empty();
+        let any = !crate::app::history().is_empty();
 
         if rows.is_empty() {
-            let (head, sub) = if crate::history().mode() == history::Mode::Off {
+            let (head, sub) = if crate::app::history().mode() == history::Mode::Off {
                 (T::HistoryIsOff, T::HistoryIsOffSub)
             } else if any {
                 (T::HistoryNoMatch, T::HistorySearch)
@@ -1606,7 +1606,7 @@ fn run(action: Action) {
         }
         Action::OpenFile => {
             if let Some(p) = ST.with(|s| s.borrow().as_ref().map(|s| s.cfg_path.clone())) {
-                crate::open_path(&p);
+                super::open_path(&p);
             }
         }
         Action::ClearHistory => {
@@ -1614,7 +1614,7 @@ fn run(action: Action) {
             let (m, c) = (wide(t(T::HistoryClearAsk)), wide(t(T::AppName)));
             let answer = unsafe { MessageBoxW(hwnd, m.as_ptr(), c.as_ptr(), MB_YESNO | MB_ICONWARNING) };
             if answer != IDNO && answer != 0 {
-                crate::history().clear();
+                crate::app::history().clear();
                 with(|s| {
                     s.scroll = 0.0;
                     s.invalidate();
