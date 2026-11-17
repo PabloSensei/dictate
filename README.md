@@ -4,14 +4,14 @@
 
 # dictate
 
-**Private, offline push-to-talk dictation for Windows.**<br>
+**Private, offline push-to-talk dictation for Windows, with macOS and Linux in beta.**<br>
 Hold a key, speak, let go: the text is typed into whatever app you're in.<br>
-Whisper runs on your own GPU. Nothing ever leaves your computer.
+Whisper runs on your own computer. Nothing ever leaves it.
 
 <a href="https://github.com/PabloSensei/dictate/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/PabloSensei/dictate?label=release&color=FF453A"></a>
 <a href="https://github.com/PabloSensei/dictate/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/PabloSensei/dictate/total?color=FF453A"></a>
 <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1F1F23"></a>
-<img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-1F1F23">
+<img alt="Platform: Windows 10/11, macOS and Linux in beta" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-1F1F23">
 <img alt="Network access: none" src="https://img.shields.io/badge/network-none-2EA44F">
 
 <a href="https://github.com/PabloSensei/dictate/releases/latest"><b>Download</b></a> •
@@ -109,6 +109,23 @@ SHA-256.
 > Left-click the tray icon to open the settings, where you can pick another key or your
 > language. Setting the speech language explicitly is more reliable than auto-detection on
 > short phrases.
+
+### macOS and Linux (beta)
+
+[**v0.3.0-beta.1**](https://github.com/PabloSensei/dictate/releases/tag/v0.3.0-beta.1) brings the
+tray icon, the hotkey, typing, the bubble with live text, history and the clipboard option to
+macOS and Linux. The settings window isn't ported yet: settings live in `dictate.ini`, which the
+tray menu opens, and the tray menu lists recent dictations.
+
+| Download | For | Model |
+|---|---|---|
+| `dictate-…-macos-arm64.zip` | Apple Silicon Macs, macOS 11+ (GPU via Metal) | small |
+| `dictate-…-macos-x86_64.zip` | Intel Macs, macOS 11+ (CPU) | small |
+| `dictate-…-linux-x86_64.tar.gz` | x86_64 with AVX2, glibc 2.35+, **X11 session** (Wayland isn't supported yet) | small |
+
+Each archive has a `README.txt` with the steps: unpack, run `download-models.sh`, start the app,
+and on macOS allow Accessibility, Input Monitoring and the microphone. The default hotkey is
+**Right Option** on a Mac and **Right Ctrl** on Linux.
 
 ### Requirements
 
@@ -274,6 +291,18 @@ winget install LLVM.LLVM
 ```
 
 The first build takes a while because it compiles the CUDA kernels; rebuilds take seconds.
+
+**macOS** needs Xcode's command line tools, Rust and CMake (`brew install cmake`).
+**Linux** needs Rust, CMake, clang and the ALSA headers
+(`sudo apt install cmake clang libclang-dev libasound2-dev` on Ubuntu). Then, in a terminal:
+
+```sh
+cargo build --release --no-default-features        # Linux, Intel Mac
+cargo build --release --no-default-features --features metal   # Apple Silicon
+tools/package-macos.sh                             # Dictate.app and its zip
+tools/package-linux.sh                             # the Linux tarball
+tools/e2e-x11.sh target/release/dictate speech.wav # end-to-end test on Xvfb
+```
 
 <details>
 <summary><b>Build details</b></summary>

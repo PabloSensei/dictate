@@ -12,50 +12,36 @@ Delete this file before merging into `main`.
 
 ## Architecture
 
-- `src/app.rs` (bin): platform-agnostic core. Shared state, engine thread, hotkey thread (Trigger),
-  history, restart handoff. It talks to the UI through `app::post(UiEvent)`, a function each
-  platform registers.
-- `src/win/` (bin, `cfg(windows)`): the existing tray, wndproc, overlay and settings window.
-- `src/mac/` (bin, `cfg(target_os = "macos")`): NSApplication + NSStatusItem menu, overlay NSPanel
-  (CALayer contents = CGImage of the bubble buffer), and an NSTimer that drains UI events.
-- `src/linux/` (bin, `cfg(target_os = "linux")`): ksni tray (D-Bus StatusNotifierItem, optional),
-  and an X11 overlay with an ARGB visual, override-redirect and an empty input shape.
-  The main loop polls the UI channel at 60 Hz.
-- Lib, per platform behind `cfg`:
-  - `audio`: waveIn (Windows), cpal plus resampling to 16 kHz (others).
-  - `keys`: GetAsyncKeyState (Windows), CGEventSource flags and key state (macOS),
-    XQueryKeymap (X11).
-  - `inject`: SendInput (Windows), CGEventKeyboardSetUnicodeString (macOS), XTest with a
-    temporarily remapped keycode (X11).
-  - `clipboard`: Win32 (Windows), arboard (others).
-  - `autostart`: HKCU Run (Windows), LaunchAgent plist (macOS), `~/.config/autostart` (Linux).
-  - `caption`: GDI (`surface.rs`, Windows), fontdue with a system font (others).
-  - `log::data_dir`: `%LOCALAPPDATA%\dictate`, `~/Library/Application Support/dictate`,
-    `$XDG_DATA_HOME/dictate`. On macOS and Linux, `dictate.ini` and `models/` live there too.
-- Hotkeys keep Windows VK codes as the canonical id; each platform maps them.
-  The macOS default is Right Option (MacBooks have no Right Ctrl); Linux uses Right Ctrl.
+- `src/app.rs` (bin): platform-agnostic core. Shared state, engine and hotkey threads, history,
+  restart handoff. UIs register a poster for `UiEvent`s.
+- `src/win/`: tray, wndproc, overlay and settings window (unchanged behavior).
+- `src/unix/`: shared by macOS and Linux: single-instance lock (`File::try_lock`), command line
+  (`--quit`, `--version`), bubble animation state (`anim.rs`), model-missing hint.
+- `src/linux/`: ksni tray, X11 ARGB override-redirect bubble with an empty input shape, a main
+  loop on an mpsc channel.
+- `src/mac/`: NSStatusItem with a menu rebuilt in `menuNeedsUpdate:`, NSPanel bubble (layer
+  contents = CGImage), GCD main queue for core events, Accessibility/Input Monitoring prompts.
+- Lib: `keys`, `inject`, `audio` (+ `audio_wavein.rs` / `audio_cpal.rs`), `clipboard_unix.rs`,
+  `autostart_unix.rs`, `caption.rs` (fontdue), `icon.rs`, per-OS `log::data_dir` and config.
 
-## Builds
+## Checks
 
-- Windows: `build.ps1` / `package.ps1`, unchanged. CMAKE_GENERATOR now comes from `build.ps1`,
-  not `.cargo/config.toml`.
-- Non-Windows: always `--no-default-features` (no CUDA). macOS uses `--features metal` on arm64
-  only; Intel Macs run on the CPU with the small model.
-- Portable CPU flags in CI: `GGML_NATIVE=OFF GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON`
-  on x86_64.
-- Linux release builds come from CI on the oldest Ubuntu runner (glibc). The WSL Ubuntu 26.04 build
-  is for development only.
-- Dev loop in WSL:
-  `cd ~/dictate && cargo build --release --no-default-features`
-  with `LIBCLANG_PATH=/usr/lib/llvm-21/lib`. WSLg is not Xorg, so the real test is the user's Ubuntu.
+- Windows: `.\build.ps1 clippy --all-targets`, `.\build.ps1 test`.
+- Linux (WSL): `~/wsl-sync.sh cargo clippy --release --no-default-features --all-targets`,
+  `tools/e2e-x11.sh` (Xvfb over TCP, xte for keys, xev as the typing target, fake mic from a WAV).
+- macOS type check from WSL: `DOCS_RS=1 WHISPER_DONT_GENERATE_BINDINGS=1 cargo clippy --target
+  x86_64-apple-darwin ...` (skips the whisper.cpp build).
+- CI (`.github/workflows/build.yml`): Linux on ubuntu-22.04 with the Xvfb e2e test; macOS on
+  macos-15-intel and macos-15 with a transcription check and a launch check.
 
 ## Status
 
-- [ ] .cargo/config.toml env moved to build.ps1
-- [ ] app.rs core extracted; Windows still builds, tests, runs (demo screenshots)
-- [ ] lib: audio (cpal), keys, inject, clipboard, autostart, caption, data_dir for Linux
-- [ ] linux UI: tray (optional), overlay, main loop; builds and runs in WSL
-- [ ] macOS: same, compiled in CI
-- [ ] CI workflow: macOS x86_64 + arm64 (.app zip), Linux x86_64 (tar.gz); smoke tests
-- [ ] download-models.sh
+- [x] .cargo/config.toml env moved to build.ps1
+- [x] app.rs core extracted; Windows builds and passes tests (runtime not re-checked yet)
+- [x] lib backends for Linux and macOS
+- [x] linux UI; e2e on Xvfb passes in WSL (Cyrillic typed into xev)
+- [x] macOS UI; type-checks and lints from WSL
+- [ ] CI green on all three runners
+- [x] download-models.sh
 - [ ] pre-release with a test checklist for the user
+- [ ] Windows runtime check of the refactored build before merging to main

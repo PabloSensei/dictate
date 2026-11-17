@@ -20,6 +20,7 @@ use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_quartz_core::{CALayer, CATransaction};
 
 use crate::app::{self, UiEvent, shared};
 use crate::unix::{self, Cli, anim::Anim};
@@ -99,6 +100,8 @@ impl Controller {
 struct Bubble {
     panel: Retained<NSPanel>,
     view: Retained<NSView>,
+    /// Hosted by the view (set before wantsLayer), so AppKit never redraws over it.
+    layer: Retained<CALayer>,
     anim: Anim,
     timer: Option<Retained<NSTimer>>,
     scale: f64,
@@ -272,9 +275,11 @@ fn make_bubble(mtm: MainThreadMarker, mode: config::Overlay) -> Bubble {
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
     let view = NSView::initWithFrame(NSView::alloc(mtm), rect);
+    let layer = CALayer::new();
+    view.setLayer(Some(&layer));
     view.setWantsLayer(true);
     panel.setContentView(Some(&view));
-    Bubble { panel, view, anim: Anim::new(mode), timer: None, scale: 2.0 }
+    Bubble { panel, view, layer, anim: Anim::new(mode), timer: None, scale: 2.0 }
 }
 
 impl Ui {
@@ -318,7 +323,12 @@ impl Ui {
         let x = vf.origin.x + px as f64 / scale;
         let y = vf.origin.y + vf.size.height - py as f64 / scale - h;
         b.panel.setFrame_display(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)), false);
-        b.view.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h)));
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h));
+        b.view.setFrame(bounds);
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        b.layer.setFrame(bounds);
+        CATransaction::commit();
         b.panel.orderFrontRegardless();
         if b.timer.is_none() {
             let target: &AnyObject = controller.as_ref();
@@ -338,11 +348,14 @@ impl Ui {
     fn tick_bubble(&mut self) {
         let Some(b) = self.bubble.as_mut() else { return };
         if b.anim.tick() {
-            if let (Some(img), Some(layer)) = (cg_image(&b.anim.buf, b.anim.w as usize, b.anim.h as usize, true), b.view.layer())
-            {
+            if let Some(img) = cg_image(&b.anim.buf, b.anim.w as usize, b.anim.h as usize, true) {
                 let obj: &AnyObject = unsafe { &*((&*img) as *const CGImage as *const AnyObject) };
-                unsafe { layer.setContents(Some(obj)) };
-                layer.setContentsScale(b.scale);
+                // no implicit cross-fade between frames
+                CATransaction::begin();
+                CATransaction::setDisableActions(true);
+                unsafe { b.layer.setContents(Some(obj)) };
+                b.layer.setContentsScale(b.scale);
+                CATransaction::commit();
             }
         } else {
             b.panel.orderOut(None);
