@@ -41,7 +41,7 @@ Delete this file before merging into `main`.
 - [x] lib backends for Linux and macOS
 - [x] linux UI; e2e on Xvfb passes in WSL (Cyrillic typed into xev)
 - [x] macOS UI; type-checks and lints from WSL
-- [ ] CI green on all three runners
+- [x] CI green on all three runners (run 44130137760)
 - [x] download-models.sh
 - [ ] pre-release with a test checklist for the user
 - [ ] Windows runtime check of the refactored build before merging to main
