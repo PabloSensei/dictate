@@ -86,13 +86,17 @@ impl History {
         if self.mode == Mode::Off {
             return;
         }
-        let mut v = self.entries.lock().unwrap();
-        if self.mode == Mode::Session {
-            v.extend(carried);
-            v.sort_by_key(|e| e.at);
-            trim(&mut v);
+        // Only a session history is carried over. If this process saves to disk (the user
+        // just switched to "On disk"), those entries are not in the file yet: add them.
+        if let Some(f) = &self.file {
+            for e in &carried {
+                append(f, e);
+            }
         }
-        // in Disk mode the file already holds them
+        let mut v = self.entries.lock().unwrap();
+        v.extend(carried);
+        v.sort_by_key(|e| e.at);
+        trim(&mut v);
     }
 
     /// Oldest first.
@@ -225,6 +229,12 @@ mod tests {
         s.extend(vec![Entry { at: 1, text: "carried".into() }]);
         assert_eq!(s.entries()[0].text, "carried");
         assert!(!file.exists());
+
+        // switching from "Until exit" to "On disk": the carried session goes into the file
+        let d = History::new(Mode::Disk, Some(file.clone()));
+        d.extend(s.entries());
+        assert_eq!(History::new(Mode::Disk, Some(file.clone())).len(), 2);
+        d.clear();
         let _ = std::fs::remove_dir_all(&dir);
         for m in [Mode::Off, Mode::Session, Mode::Disk] {
             assert_eq!(Mode::parse(m.as_str()), Some(m));
