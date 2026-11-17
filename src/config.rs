@@ -1,4 +1,5 @@
-//! `dictate.ini` next to the executable: plain `key = value` lines, `#` comments.
+//! `dictate.ini`: plain `key = value` lines, `#` comments. Next to the executable on
+//! Windows (portable), in the app's data folder on macOS and Linux.
 
 use std::path::{Path, PathBuf};
 
@@ -77,6 +78,34 @@ const CPU_DEFAULTS: [(&str, &str); 3] = [
     ("threads = 4", "threads = 8"),
 ];
 
+/// The template speaks Windows; these lines change on macOS and Linux.
+#[cfg(not(windows))]
+const UNIX_EDITS: &[(&str, &str)] = &[
+    ("models\\", "models/"),
+    ("(the settings window does that for you)", "(tray menu > Restart)"),
+    ("download-models.cmd fetches it", "download-models.sh fetches it"),
+    ("disk = also saved to %LOCALAPPDATA%\\dictate\\history.txt", "disk = also saved to history.txt next to this file"),
+    ("auto (as in Windows)", "auto (as in the system)"),
+    (
+        "# Push-to-talk key: RCtrl, LCtrl, RAlt, RShift, LShift, Apps, F1..F24, Pause, ScrollLock,\n\
+         # Insert, XButton1 / XButton2 (mouse side buttons), MButton, or a virtual-key code like 0xA3.\n\
+         hotkey = RCtrl",
+        HOTKEY_LINES,
+    ),
+];
+
+#[cfg(target_os = "macos")]
+const HOTKEY_LINES: &str = "# Push-to-talk key: ROption, LOption, RCmd, LCmd, RCtrl, LCtrl, RShift, LShift, F1..F20.\n\
+     # MacBook keyboards have no right Control key, so Right Option is the default.\n\
+     hotkey = ROption";
+#[cfg(all(unix, not(target_os = "macos")))]
+const HOTKEY_LINES: &str = "# Push-to-talk key: RCtrl, LCtrl, RAlt, RShift, LShift, RSuper, Apps, F1..F24, Pause,\n\
+     # ScrollLock, Insert.\n\
+     hotkey = RCtrl";
+
+/// Line ending for files people open in a text editor.
+pub const NL: &str = if cfg!(windows) { "\r\n" } else { "\n" };
+
 /// The default dictate.ini for this build (the CPU-only build gets a smaller model).
 pub fn template() -> String {
     let mut t = TEMPLATE.to_string();
@@ -84,6 +113,10 @@ pub fn template() -> String {
         for (from, to) in CPU_DEFAULTS {
             t = t.replace(from, to);
         }
+    }
+    #[cfg(not(windows))]
+    for (from, to) in UNIX_EDITS {
+        t = t.replace(from, to);
     }
     t
 }
@@ -158,6 +191,14 @@ impl Config {
     }
 }
 
+/// Where the app keeps dictate.ini: next to the exe on Windows, in the data folder elsewhere.
+pub fn default_path() -> PathBuf {
+    if cfg!(windows) {
+        return path_next_to_exe();
+    }
+    crate::log::data_dir().map(|d| d.join("dictate.ini")).unwrap_or_else(path_next_to_exe)
+}
+
 pub fn path_next_to_exe() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dictate.exe"));
     exe.with_file_name("dictate.ini")
@@ -166,7 +207,10 @@ pub fn path_next_to_exe() -> PathBuf {
 /// Loads the config, creating it from the template on first run.
 pub fn load_or_create(path: &Path) -> Result<Config, String> {
     if !path.exists() {
-        std::fs::write(path, template().replace('\n', "\r\n"))
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(path, template().replace('\n', NL))
             .map_err(|e| format!("can't create {}: {e}", path.display()))?;
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -330,7 +374,10 @@ pub fn parse_key(v: &str) -> Option<i32> {
         "lcontrol" => 0xA2,
         "rmenu" => 0xA5,
         "lalt" | "lmenu" => 0xA4,
-        "rwin" => 0x5C,
+        "rwin" | "rsuper" | "rcmd" | "rcommand" => 0x5C,
+        "lcmd" | "lcommand" | "lsuper" => 0x5B,
+        "roption" | "ropt" => 0xA5,
+        "loption" | "lopt" => 0xA4,
         "capslock" => 0x14,
         "menu" => 0x5D,
         _ => return None,
@@ -354,8 +401,8 @@ pub fn save(path: &Path, updates: &[(&str, String)]) -> Result<(), String> {
             None => lines.push(new_line),
         }
     }
-    let mut out = lines.join("\r\n");
-    out.push_str("\r\n");
+    let mut out = lines.join(NL);
+    out.push_str(NL);
     parse(&out)?; // never write a config we can't read back
     let tmp = path.with_extension("ini.tmp");
     std::fs::write(&tmp, out).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -369,14 +416,30 @@ mod tests {
     #[test]
     fn template_parses() {
         let c = Config::default();
-        assert_eq!(c.hotkey, 0xA3);
+        assert_eq!(c.hotkey, if cfg!(target_os = "macos") { 0xA5 } else { 0xA3 });
         assert_eq!(c.language, "auto");
         assert!(c.model_sha256.is_some());
         assert!(c.replace.is_empty() && c.prompt.is_empty());
         let mut r = c.clone();
-        r.resolve_paths(Path::new(r"C:\apps\dictate"));
-        assert!(r.model.starts_with(r"C:\apps\dictate\models") && r.model.extension().is_some_and(|e| e == "bin"));
+        let base = Path::new(if cfg!(windows) { r"C:\apps\dictate" } else { "/home/u/.local/share/dictate" });
+        r.resolve_paths(base);
+        assert!(r.model.starts_with(base.join("models")) && r.model.extension().is_some_and(|e| e == "bin"));
         assert!(r.vad_model.is_some_and(|v| v.is_absolute()));
+    }
+
+    #[test]
+    fn platform_template() {
+        let t = template();
+        let c = parse(&t).unwrap();
+        #[cfg(not(windows))]
+        {
+            for (from, _) in UNIX_EDITS {
+                assert_eq!(TEMPLATE.matches(from).count().min(1), 1, "{from}");
+            }
+            assert!(!t.contains('\\') &&!t.contains("LOCALAPPDATA"), "{t}");
+            assert!(crate::keys::supported(c.hotkey));
+        }
+        assert!(c.model.to_string_lossy().starts_with("models"));
     }
 
     #[test]

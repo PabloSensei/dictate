@@ -1,21 +1,21 @@
-//! Microphone capture via the classic waveIn API: 16 kHz mono PCM16.
-//! Windows' audio mapper does the resampling, so no DSP code lives here.
+//! Microphone capture: 16 kHz mono samples in [-1, 1].
+//! Windows: the classic waveIn API; its audio mapper does the resampling.
+//! macOS and Linux: cpal (CoreAudio, ALSA) at the device's own rate, resampled here.
 //! The device is opened only while the hotkey is held, so the mic indicator
 //! is on exactly when we are listening.
 
-use std::ptr::{null, null_mut};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::Media::Audio::{
-    CALLBACK_EVENT, HWAVEIN, WAVE_FORMAT_PCM, WAVE_MAPPER, WAVEFORMATEX, WAVEHDR, WHDR_DONE,
-    waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
-    waveInUnprepareHeader,
-};
-use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+#[cfg(windows)]
+#[path = "audio_wavein.rs"]
+mod backend;
+#[cfg(not(windows))]
+#[path = "audio_cpal.rs"]
+mod backend;
+use backend::capture;
 
 pub const SAMPLE_RATE: u32 = 16_000;
 
@@ -27,11 +27,11 @@ pub fn level() -> f32 {
 }
 
 /// RMS mapped from -55..-10 dBFS onto 0..1.
-fn loudness(samples: &[i16]) -> f32 {
+pub(crate) fn loudness(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let sum: f64 = samples.iter().map(|&s| (s as f64 / 32768.0).powi(2)).sum();
+    let sum: f64 = samples.iter().map(|&s| (s as f64).powi(2)).sum();
     let rms = (sum / samples.len() as f64).sqrt().max(1e-9);
     ((20.0 * rms.log10() + 55.0) / 45.0).clamp(0.0, 1.0) as f32
 }
@@ -51,7 +51,7 @@ pub fn live_total() -> usize {
     LIVE_TOTAL.load(Ordering::Acquire)
 }
 
-fn live_reset() {
+pub(crate) fn live_reset() {
     if let Ok(mut v) = LIVE.lock() {
         v.clear();
         v.shrink_to(LIVE_KEEP);
@@ -59,7 +59,7 @@ fn live_reset() {
     LIVE_TOTAL.store(0, Ordering::Release);
 }
 
-fn live_push(s: &[f32]) {
+pub(crate) fn live_push(s: &[f32]) {
     if let Ok(mut v) = LIVE.lock() {
         v.extend_from_slice(s);
         if v.len() > LIVE_KEEP + SAMPLE_RATE as usize * 5 {
@@ -70,11 +70,7 @@ fn live_push(s: &[f32]) {
     LIVE_TOTAL.fetch_add(s.len(), Ordering::AcqRel);
 }
 
-const BUF_SAMPLES: usize = 800; // 50 ms per buffer: responsive level meter
-const N_BUFS: usize = 16;
-const HDR_SIZE: u32 = std::mem::size_of::<WAVEHDR>() as u32;
-
-type CaptureResult = Result<Vec<f32>, String>;
+pub(crate) type CaptureResult = Result<Vec<f32>, String>;
 
 pub struct Recorder {
     stop: Arc<AtomicBool>,
@@ -124,119 +120,3 @@ impl Drop for Recorder {
     }
 }
 
-struct Device {
-    hwi: HWAVEIN,
-    event: HANDLE,
-}
-
-impl Drop for Device {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.hwi.is_null() {
-                waveInReset(self.hwi);
-                waveInClose(self.hwi);
-            }
-            if !self.event.is_null() {
-                CloseHandle(self.event);
-            }
-        }
-    }
-}
-
-fn capture(stop: Arc<AtomicBool>, ready: mpsc::Sender<Result<(), String>>, max_samples: usize) -> CaptureResult {
-    let fail = |ready: &mpsc::Sender<Result<(), String>>, msg: String| {
-        let _ = ready.send(Err(msg.clone()));
-        Err(msg)
-    };
-
-    // Buffers and headers must not move or be freed while the driver owns them:
-    // allocated once, never resized, and declared before `dev` so they drop after it.
-    let mut bufs: Box<[[i16; BUF_SAMPLES]]> = vec![[0i16; BUF_SAMPLES]; N_BUFS].into_boxed_slice();
-    let mut hdrs: Box<[WAVEHDR]> = (0..N_BUFS).map(|_| WAVEHDR::default()).collect();
-
-    let event = unsafe { CreateEventW(null(), 0, 0, null()) };
-    if event.is_null() {
-        return fail(&ready, "CreateEventW failed".into());
-    }
-    let mut dev = Device { hwi: null_mut(), event };
-
-    let fmt = WAVEFORMATEX {
-        wFormatTag: WAVE_FORMAT_PCM as u16,
-        nChannels: 1,
-        nSamplesPerSec: SAMPLE_RATE,
-        nAvgBytesPerSec: SAMPLE_RATE * 2,
-        nBlockAlign: 2,
-        wBitsPerSample: 16,
-        cbSize: 0,
-    };
-    let r = unsafe { waveInOpen(&mut dev.hwi, WAVE_MAPPER, &fmt, event as usize, 0, CALLBACK_EVENT) };
-    if r != 0 {
-        dev.hwi = null_mut();
-        return fail(&ready, format!("microphone unavailable (waveInOpen = {r})"));
-    }
-
-    for i in 0..N_BUFS {
-        hdrs[i].lpData = bufs[i].as_mut_ptr() as *mut u8;
-        hdrs[i].dwBufferLength = (BUF_SAMPLES * 2) as u32;
-        unsafe {
-            if waveInPrepareHeader(dev.hwi, &mut hdrs[i], HDR_SIZE) != 0
-                || waveInAddBuffer(dev.hwi, &mut hdrs[i], HDR_SIZE) != 0
-            {
-                return fail(&ready, "waveIn buffer setup failed".into());
-            }
-        }
-    }
-    live_reset();
-    if unsafe { waveInStart(dev.hwi) } != 0 {
-        return fail(&ready, "waveInStart failed".into());
-    }
-    let _ = ready.send(Ok(()));
-
-    let mut out: Vec<f32> = Vec::with_capacity(SAMPLE_RATE as usize * 20);
-    let mut next = 0usize; // buffers complete in submission order
-    let take = |h: &WAVEHDR, buf: &[i16; BUF_SAMPLES], out: &mut Vec<f32>| {
-        let n = (h.dwBytesRecorded as usize / 2).min(BUF_SAMPLES);
-        let room = max_samples.saturating_sub(out.len());
-        let start = out.len();
-        out.extend(buf[..n.min(room)].iter().map(|&s| s as f32 / 32768.0));
-        live_push(&out[start..]);
-        LEVEL.store(loudness(&buf[..n]).to_bits(), Ordering::Relaxed);
-    };
-
-    loop {
-        let stopping = stop.load(Ordering::Acquire);
-        if stopping {
-            // Returns every queued buffer to us, marked done (possibly partially filled).
-            unsafe { waveInReset(dev.hwi) };
-        } else {
-            unsafe { WaitForSingleObject(dev.event, 50) };
-        }
-        for _ in 0..N_BUFS {
-            // WAVEHDR is packed(1) and the driver writes dwFlags from another thread:
-            // read it through a raw pointer, unaligned, never via a cached reference.
-            let flags = unsafe { std::ptr::addr_of!((*hdrs.as_ptr().add(next)).dwFlags).read_unaligned() };
-            if flags & WHDR_DONE == 0 {
-                break;
-            }
-            fence(Ordering::Acquire);
-            take(&hdrs[next], &bufs[next], &mut out);
-            if stopping {
-                hdrs[next].dwFlags &= !WHDR_DONE;
-            } else if unsafe { waveInAddBuffer(dev.hwi, &mut hdrs[next], HDR_SIZE) } != 0 {
-                return Err("waveInAddBuffer failed".into());
-            }
-            next = (next + 1) % N_BUFS;
-        }
-        if stopping {
-            break;
-        }
-    }
-
-    LEVEL.store(0, Ordering::Relaxed);
-    live_reset();
-    for h in hdrs.iter_mut() {
-        unsafe { waveInUnprepareHeader(dev.hwi, h, HDR_SIZE) };
-    }
-    drop(dev);
-    Ok(out)
-}

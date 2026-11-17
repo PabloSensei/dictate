@@ -2,21 +2,38 @@
 name = "dictate"
 version = "0.2.0"
 edition = "2024"
-description = "Private, offline push-to-talk dictation for Windows, powered by whisper.cpp"
+description = "Private, offline push-to-talk dictation for Windows, macOS and Linux, powered by whisper.cpp"
 license = "MIT"
 repository = "https://github.com/PabloSensei/dictate"
 readme = "README.md"
-keywords = ["dictation", "speech-to-text", "whisper", "windows", "offline"]
+keywords = ["dictation", "speech-to-text", "whisper", "offline", "push-to-talk"]
 categories = ["accessibility", "multimedia::audio"]
 publish = false
 
 [features]
 default = ["cuda"]
 cuda = ["whisper-rs/cuda"]
+metal = ["whisper-rs/metal"]
 
 [dependencies]
 sha2 = "0.11.1"
 whisper-rs = "0.16"
+
+[target.'cfg(not(windows))'.dependencies]
+cpal = "0.18"
+arboard = { version = "3.7", default-features = false }
+fontdue = "0.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.14", features = ["xtest", "shape", "randr"] }
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+
+[target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",

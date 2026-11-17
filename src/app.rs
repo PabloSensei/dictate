@@ -217,6 +217,11 @@ pub fn bubble_phase() -> Option<dictate::bubble::Phase> {
 fn engine_thread(rx: Receiver<Vec<f32>>) {
     let sh = shared();
     let t0 = Instant::now();
+    #[cfg(unix)]
+    if let Some(hint) = crate::unix::missing_model_hint(&sh.cfg.model) {
+        set_error(hint);
+        return;
+    }
     let mut engine = match Engine::load(&sh.cfg) {
         Ok(e) => e,
         Err(e) => {

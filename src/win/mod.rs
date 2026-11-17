@@ -389,49 +389,15 @@ fn create_window() -> Result<HWND, String> {
     }
 }
 
-/// Draws the tray icons: a microphone glyph in a colored disc, sized for the current DPI.
+/// Draws the tray icons (see `dictate::icon`), sized for the current DPI.
 fn make_icons() -> [usize; 5] {
     let s = unsafe { GetSystemMetrics(SM_CXSMICON) }.clamp(16, 64);
-    let colors: [(u8, u8, u8); 5] = [
-        (0xF5, 0xA6, 0x23), // loading: amber
-        (0x6E, 0x76, 0x80), // idle: slate
-        (0xE5, 0x39, 0x35), // recording: red
-        (0x1E, 0x88, 0xE5), // busy: blue
-        (0x8E, 0x24, 0xAA), // error: purple
-    ];
-    colors.map(|c| make_icon(s, c) as usize)
+    dictate::icon::LOOK_COLORS.map(|c| make_icon(s, c) as usize)
 }
 
-fn make_icon(s: i32, (r, g, b): (u8, u8, u8)) -> HICON {
+fn make_icon(s: i32, color: (u8, u8, u8)) -> HICON {
+    let px = dictate::icon::tray_pixels(s, color);
     let n = s as usize;
-    let f = s as f32;
-    let mut px = vec![0u32; n * n];
-    // signed distance helpers in pixel units
-    let disc = |x: f32, y: f32| ((x - f / 2.0).hypot(y - f / 2.0)) - f * 0.48;
-    let capsule = |x: f32, y: f32| {
-        let (cx, w) = (f / 2.0, f * 0.11);
-        let (y0, y1) = (f * 0.22, f * 0.50);
-        let dy = if y < y0 { y0 - y } else if y > y1 { y - y1 } else { 0.0 };
-        (x - cx).hypot(dy) - w
-    };
-    let cup = |x: f32, y: f32| {
-        // U-shaped holder: ring segment below the capsule + stem + base
-        let (cx, cy, rad, th) = (f / 2.0, f * 0.47, f * 0.21, f * 0.055);
-        let ring = if y >= cy { ((x - cx).hypot(y - cy) - rad).abs() - th } else { f };
-        let stem = if (y - f * 0.74).abs() < f * 0.07 { (x - cx).abs() - th } else { f };
-        let base = if (x - cx).abs() < f * 0.16 { (y - f * 0.80).abs() - th } else { f };
-        ring.min(stem).min(base)
-    };
-    for yi in 0..n {
-        for xi in 0..n {
-            let (x, y) = (xi as f32 + 0.5, yi as f32 + 0.5);
-            let a_disc = (0.5 - disc(x, y)).clamp(0.0, 1.0);
-            let a_mic = (0.5 - capsule(x, y).min(cup(x, y))).clamp(0.0, 1.0);
-            let mix = |c: u8| (c as f32 * (1.0 - a_mic) + 255.0 * a_mic) as u32;
-            let a = (a_disc * 255.0) as u32;
-            px[yi * n + xi] = (a << 24) | (mix(r) << 16) | (mix(g) << 8) | mix(b);
-        }
-    }
     unsafe {
         let color = CreateBitmap(s, s, 1, 32, px.as_ptr() as *const c_void);
         let mask_row = n.div_ceil(16) * 2;

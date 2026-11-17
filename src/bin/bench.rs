@@ -16,6 +16,11 @@ use dictate::audio::Recorder;
 use dictate::config::Config;
 use dictate::engine::Engine;
 use dictate::{metrics, wav};
+// caption text: GDI on Windows, fontdue elsewhere (same API)
+#[cfg(not(windows))]
+use dictate::caption as surface;
+#[cfg(windows)]
+use dictate::surface;
 
 fn main() {
     if let Err(e) = real_main() {
@@ -76,10 +81,9 @@ fn real_main() -> Result<(), String> {
 
 fn bubble_sheet(out: &Path) -> Result<(), String> {
     use dictate::bubble::{self, CAP_TEXT_W, Caption, Frame, N_BARS, Phase};
-    use dictate::surface;
     let s = 1.5;
     let (w, h) = bubble::size(s);
-    let mut ts = surface::make_text_surface(s).ok_or("GDI text surface")?;
+    let mut ts = surface::make_text_surface(s).ok_or("caption font")?;
     let wave: Vec<f32> = (0..N_BARS).map(|i| 1.0 - (i as f32 - 5.0).abs() / 6.0).collect();
     let long = "Quick update on the release: the settings window is done, the bubble follows the mouse across monitors, and the live preview keeps up while you speak.";
     // (phase, t, appear, bars, caption, caption above)
@@ -127,11 +131,10 @@ fn bubble_sheet(out: &Path) -> Result<(), String> {
 /// then recognizing, then hiding) over `bg` as numbered BMPs, for the README GIF.
 fn demo_frames(dir: &Path, bg: u32) -> Result<(), String> {
     use dictate::bubble::{self, CAP_TEXT_W, Caption, Frame, N_BARS, Phase};
-    use dictate::surface;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let s = 1.5; // crisp on HiDPI screens; the README shows it at 2/3 size
     let (w, h) = bubble::size(s);
-    let mut ts = surface::make_text_surface(s).ok_or("GDI text surface")?;
+    let mut ts = surface::make_text_surface(s).ok_or("caption font")?;
     let words: Vec<&str> = "Hey team, quick update: the new release is ready, the installer works on a clean machine, and I'll send the notes after lunch."
         .split(' ')
         .collect();

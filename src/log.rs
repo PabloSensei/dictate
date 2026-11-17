@@ -1,4 +1,4 @@
-//! Tiny append-only log in %LOCALAPPDATA%\dictate\dictate.log.
+//! Tiny append-only log, dictate.log in the app's data folder.
 //! Only timings and errors go here, never recognized text.
 
 use std::io::Write;
@@ -8,10 +8,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
-/// The app's data folder: %LOCALAPPDATA%\dictate (log, saved history).
+/// The app's data folder (log, saved history; on macOS and Linux also dictate.ini and
+/// models): %LOCALAPPDATA%\dictate, ~/Library/Application Support/dictate, or
+/// $XDG_DATA_HOME/dictate (~/.local/share/dictate).
 pub fn data_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("dictate"))
+    #[cfg(windows)]
+    let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    #[cfg(target_os = "macos")]
+    let base = PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let base = match std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        Some(v) => PathBuf::from(v),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
+    };
+    Some(base.join("dictate"))
 }
 
 pub fn path() -> Option<PathBuf> {

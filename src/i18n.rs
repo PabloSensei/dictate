@@ -36,12 +36,28 @@ pub fn set(l: Lang) {
     CURRENT.store(l as u8, Ordering::Relaxed);
 }
 
-/// "auto" → the Windows display language (Belarusian and other Cyrillic → Russian,
+/// "auto" → the system display language (Belarusian and other Cyrillic → Russian,
 /// anything unknown → English); otherwise a language code.
 pub fn resolve(setting: &str) -> Lang {
     if let Some(l) = Lang::from_code(setting) {
         return l;
     }
+    system_lang()
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn from_tag(tag: &str) -> Lang {
+    let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or("").to_ascii_lowercase();
+    match primary.as_str() {
+        "ru" | "be" | "kk" | "ky" => Lang::Ru,
+        "pl" => Lang::Pl,
+        "uk" => Lang::Uk,
+        _ => Lang::En,
+    }
+}
+
+#[cfg(windows)]
+fn system_lang() -> Lang {
     let primary = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3FF;
     match primary {
         0x19 | 0x23 | 0x3F | 0x40 => Lang::Ru, // ru, be, kk, ky
@@ -49,6 +65,51 @@ pub fn resolve(setting: &str) -> Lang {
         0x22 => Lang::Uk,
         _ => Lang::En,
     }
+}
+
+/// The first language in System Settings > General > Language & Region.
+#[cfg(target_os = "macos")]
+fn system_lang() -> Lang {
+    use std::ffi::c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFLocaleCopyPreferredLanguages() -> *const c_void;
+        fn CFArrayGetCount(a: *const c_void) -> isize;
+        fn CFArrayGetValueAtIndex(a: *const c_void, i: isize) -> *const c_void;
+        fn CFStringGetCString(s: *const c_void, buf: *mut u8, len: isize, enc: u32) -> bool;
+        fn CFRelease(p: *const c_void);
+    }
+    const UTF8: u32 = 0x0800_0100;
+    unsafe {
+        let arr = CFLocaleCopyPreferredLanguages();
+        if arr.is_null() {
+            return Lang::En;
+        }
+        let mut buf = [0u8; 64];
+        let tag = if CFArrayGetCount(arr) > 0
+            && CFStringGetCString(CFArrayGetValueAtIndex(arr, 0), buf.as_mut_ptr(), buf.len() as isize, UTF8)
+        {
+            let n = buf.iter().position(|&b| b == 0).unwrap_or(0);
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        } else {
+            String::new()
+        };
+        CFRelease(arr);
+        from_tag(&tag)
+    }
+}
+
+/// LANGUAGE / LC_ALL / LC_MESSAGES / LANG, as gettext reads them.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn system_lang() -> Lang {
+    for var in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(v) = std::env::var(var)
+            && let Some(first) = v.split(':').next().filter(|f| !f.is_empty() && *f != "C" && *f != "POSIX")
+        {
+            return from_tag(first);
+        }
+    }
+    Lang::En
 }
 
 macro_rules! texts {
@@ -178,16 +239,25 @@ pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
 
 /// Localized name of a hotkey.
 pub fn key_label(vk: i32) -> String {
+    const ALT: &str = if cfg!(target_os = "macos") { "Option" } else { "Alt" };
+    const SUPER: &str = if cfg!(target_os = "macos") {
+        "Command"
+    } else if cfg!(windows) {
+        "Win"
+    } else {
+        "Super"
+    };
     let side = |right: bool, key: &str| format!("{} {key}", t(if right { T::KeyRight } else { T::KeyLeft }));
     match vk {
         0x70..=0x87 => format!("F{}", vk - 0x70 + 1),
-        0xA5 => side(true, "Alt"),
-        0xA4 => side(false, "Alt"),
+        0xA5 => side(true, ALT),
+        0xA4 => side(false, ALT),
         0xA3 => side(true, "Ctrl"),
         0xA2 => side(false, "Ctrl"),
         0xA1 => side(true, "Shift"),
         0xA0 => side(false, "Shift"),
-        0x5C => side(true, "Win"),
+        0x5C => side(true, SUPER),
+        0x5B => side(false, SUPER),
         0x5D => t(T::KeyMenu).into(),
         0x13 => "Pause".into(),
         0x91 => "Scroll Lock".into(),
@@ -203,6 +273,16 @@ pub fn key_label(vk: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locale_tags() {
+        assert_eq!(from_tag("ru_RU.UTF-8"), Lang::Ru);
+        assert_eq!(from_tag("be-BY"), Lang::Ru);
+        assert_eq!(from_tag("pl"), Lang::Pl);
+        assert_eq!(from_tag("uk_UA@euro"), Lang::Uk);
+        assert_eq!(from_tag("en-GB"), Lang::En);
+        assert_eq!(from_tag(""), Lang::En);
+    }
 
     #[test]
     fn every_text_exists_in_every_language() {

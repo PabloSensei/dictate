@@ -36,8 +36,8 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    //! Modifier keys come from the device-dependent bits of the HID flags state
-    //! (left and right are separate); other keys from CGEventSourceKeyState.
+    //! A key counts as down when either the HID key state or the device-dependent
+    //! modifier bits (left and right are separate there) say so.
 
     const HID_SYSTEM_STATE: i32 = 1; // kCGEventSourceStateHIDSystemState
 
@@ -47,28 +47,29 @@ mod imp {
         fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     }
 
-    /// Device-dependent modifier bits (NX_DEVICE*KEYMASK).
-    fn modifier_bit(vk: i32) -> Option<u64> {
-        Some(match vk {
-            0xA2 => 0x0000_0001, // left control
-            0xA3 => 0x0000_2000, // right control
-            0xA0 => 0x0000_0002, // left shift
-            0xA1 => 0x0000_0004, // right shift
-            0xA4 => 0x0000_0020, // left option
-            0xA5 => 0x0000_0040, // right option
-            0x5B => 0x0000_0008, // left command
-            0x5C => 0x0000_0010, // right command
-            _ => return None,
-        })
-    }
-    const ALL_MODIFIERS: u64 = 0x2000 | 0x1 | 0x2 | 0x4 | 0x20 | 0x40 | 0x8 | 0x10;
+    /// (Windows VK, macOS keycode kVK_*, device-dependent flag bit NX_DEVICE*KEYMASK)
+    const MODIFIERS: [(i32, u16, u64); 8] = [
+        (0xA2, 0x3B, 0x0000_0001), // left control
+        (0xA3, 0x3E, 0x0000_2000), // right control
+        (0xA0, 0x38, 0x0000_0002), // left shift
+        (0xA1, 0x3C, 0x0000_0004), // right shift
+        (0xA4, 0x3A, 0x0000_0020), // left option
+        (0xA5, 0x3D, 0x0000_0040), // right option
+        (0x5B, 0x37, 0x0000_0008), // left command
+        (0x5C, 0x36, 0x0000_0010), // right command
+    ];
+    const ALL_MODIFIER_BITS: u64 = 0x2000 | 0x1 | 0x2 | 0x4 | 0x20 | 0x40 | 0x8 | 0x10;
+    const CAPS_LOCK: u16 = 0x39;
+    const FN: u16 = 0x3F;
 
-    /// macOS virtual key codes (kVK_*) for the non-modifier keys we accept.
     fn keycode(vk: i32) -> Option<u16> {
         const F: [u16; 20] = [
             0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B, 0x71, 0x6A, 0x40, 0x4F,
             0x50, 0x5A,
         ];
+        if let Some(m) = MODIFIERS.iter().find(|m| m.0 == vk) {
+            return Some(m.1);
+        }
         match vk {
             0x70..=0x83 => Some(F[(vk - 0x70) as usize]), // F1..F20
             0x1B => Some(0x35),                           // escape
@@ -76,27 +77,33 @@ mod imp {
         }
     }
 
+    fn flag_bit(vk: i32) -> u64 {
+        MODIFIERS.iter().find(|m| m.0 == vk).map_or(0, |m| m.2)
+    }
+
+    fn key_state(k: u16) -> bool {
+        unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, k) }
+    }
+
+    fn flags() -> u64 {
+        unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) }
+    }
+
     pub fn down(vk: i32) -> bool {
-        if let Some(bit) = modifier_bit(vk) {
-            return unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) } & bit != 0;
-        }
-        keycode(vk).is_some_and(|k| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, k) })
+        let bit = flag_bit(vk);
+        (bit != 0 && flags() & bit != 0) || keycode(vk).is_some_and(key_state)
     }
 
     pub fn other_down(hotkey: i32) -> bool {
-        let own = modifier_bit(hotkey).unwrap_or(0);
-        if unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) } & ALL_MODIFIERS & !own != 0 {
+        if flags() & ALL_MODIFIER_BITS & !flag_bit(hotkey) != 0 {
             return true;
         }
-        let own_key = keycode(hotkey);
-        // 0x36..=0x3F are the modifier and fn keys, handled through the flags above
-        (0u16..0x80)
-            .filter(|k| !(0x36..=0x3F).contains(k) && Some(*k) != own_key)
-            .any(|k| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, k) })
+        let own = keycode(hotkey);
+        (0u16..0x80).filter(|&k| Some(k) != own && k != CAPS_LOCK && k != FN).any(key_state)
     }
 
     pub fn supported(vk: i32) -> bool {
-        modifier_bit(vk).is_some() || keycode(vk).is_some()
+        keycode(vk).is_some()
     }
 }
 
@@ -106,7 +113,6 @@ mod imp {
     //! Key codes are the standard evdev ones + 8, the same on every Xorg setup.
 
     use std::sync::Mutex;
-    use x11rb::connection::Connection;
     use x11rb::protocol::xproto::ConnectionExt;
     use x11rb::rust_connection::RustConnection;
 
@@ -164,7 +170,7 @@ mod imp {
     pub fn other_down(hotkey: i32) -> bool {
         let Some(m) = keymap() else { return false };
         let own = keycode(hotkey);
-        (8u8..=255).any(|k| Some(k) != own && bit(&m, k))
+        (8u8..=255).any(|k| Some(k) != own && bit(&m, k) && !crate::inject::is_scratch(k))
     }
 
     pub fn supported(vk: i32) -> bool {
@@ -174,11 +180,6 @@ mod imp {
     /// For the UI: whether an X11 display is reachable at all.
     pub fn available() -> bool {
         keymap().is_some()
-    }
-
-    #[allow(dead_code)]
-    fn _assert_send(c: &RustConnection) -> impl Connection + '_ {
-        c
     }
 }
 
