@@ -43,5 +43,5 @@ Delete this file before merging into `main`.
 - [x] macOS UI; type-checks and lints from WSL
 - [x] CI green on all three runners (run 44130137760)
 - [x] download-models.sh
-- [ ] pre-release with a test checklist for the user
+- [x] pre-release v0.3.0-beta.1 published (CI run 44132850889); waiting for the user's tests on Intel MBP and Ubuntu Xorg
 - [ ] Windows runtime check of the refactored build before merging to main
