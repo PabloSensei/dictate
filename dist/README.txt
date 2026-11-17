@@ -16,7 +16,8 @@ GETTING STARTED
 4. Click into any text field, hold Right Ctrl, speak, and release.
 
 Left-click the tray icon to open the settings: hotkey, hold or toggle mode,
-speech language, vocabulary hint, bubble, interface language, start with Windows.
+speech language, vocabulary hint, bubble, copy to clipboard, history, interface
+language, start with Windows. Tray menu > History... shows what you dictated.
 
 REQUIREMENTS
 
@@ -31,9 +32,11 @@ REQUIREMENTS
 
 PRIVACY
 
-dictate has no network code. Audio stays in memory, text is typed with SendInput,
-the clipboard is never used, and the log (%LOCALAPPDATA%\dictate\dictate.log)
-holds only timings and errors. The only download is download-models.cmd, which
+dictate has no network code. Audio stays in memory and text is typed with
+SendInput. The clipboard is used only if you turn on "Copy to clipboard" or press
+Copy in the history. The history is kept in memory until you quit, unless you
+choose "On disk". The log (%LOCALAPPDATA%\dictate\dictate.log) holds only
+timings and errors. The only download is download-models.cmd, which
 you run yourself.
 
 FILES

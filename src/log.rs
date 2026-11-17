@@ -8,9 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
-pub fn path() -> Option<PathBuf> {
+/// The app's data folder: %LOCALAPPDATA%\dictate (log, saved history).
+pub fn data_dir() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("dictate").join("dictate.log"))
+    Some(PathBuf::from(base).join("dictate"))
+}
+
+pub fn path() -> Option<PathBuf> {
+    Some(data_dir()?.join("dictate.log"))
 }
 
 pub fn write(msg: &str) {

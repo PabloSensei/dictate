@@ -1,7 +1,8 @@
 //! Tray app: hold the hotkey, speak, release -> text is typed into the focused window.
 //!
 //! Threads: main (tray + message loop), hotkey (polls one key, records),
-//! engine (loads the model, transcribes, types). No hooks, no clipboard, no network.
+//! engine (loads the model, transcribes, types). No hooks, no network; the clipboard
+//! only when `clipboard = true` or you press Copy in the history.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -22,8 +23,9 @@ use dictate::bubble::Phase;
 use dictate::trigger::{Event, Trigger};
 use dictate::config::{self, Config};
 use dictate::engine::Engine;
+use dictate::history::{self, History};
 use dictate::i18n::{self, T, t};
-use dictate::{autostart, inject, log, wide};
+use dictate::{autostart, clipboard, inject, log, wide};
 
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
@@ -49,12 +51,18 @@ const WM_REFRESH: u32 = WM_APP + 2;
 const WM_SHOW_ERROR: u32 = WM_APP + 3;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 4;
 const WM_PREVIEW: u32 = WM_APP + 5;
+const WM_HISTORY: u32 = WM_APP + 6;
+const WM_COPY_TEXT: u32 = WM_APP + 7;
+
+/// Set on the new process when restarting: the session history comes on stdin.
+const HANDOFF_ENV: &str = "DICTATE_HISTORY_HANDOFF";
 
 const ID_SETTINGS: usize = 10;
 const ID_LOG: usize = 11;
 const ID_RESTART: usize = 12;
 const ID_QUIT: usize = 13;
 const ID_AUTOSTART: usize = 14;
+const ID_HISTORY: usize = 15;
 const ID_LANG_BASE: usize = 30; // 30 = system default, 31.. = i18n::LANGS
 
 struct Shared {
@@ -70,6 +78,9 @@ struct Shared {
     preview: Mutex<String>,
     /// Interface language setting ("auto" or a code), for the tray menu checkmark.
     ui_lang: Mutex<String>,
+    history: History,
+    /// Text waiting to be put on the clipboard by the main thread.
+    to_clipboard: Mutex<Option<String>>,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -89,6 +100,14 @@ enum Look {
 
 fn shared() -> &'static Shared {
     SHARED.get().expect("shared state")
+}
+
+pub fn history() -> &'static History {
+    &shared().history
+}
+
+pub fn main_hwnd() -> HWND {
+    HWND_MAIN.load(Ordering::Acquire)
 }
 
 fn post(msg: u32) {
@@ -122,13 +141,27 @@ fn set_ui_language(code: &str) {
 }
 
 fn main() {
+    // Restarted after saving settings: take over the previous process's session history.
+    let carried = if std::env::var_os(HANDOFF_ENV).is_some() {
+        let mut s = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s);
+        history::decode_all(&s)
+    } else {
+        Vec::new()
+    };
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     i18n::set(i18n::resolve("auto")); // until the config says otherwise
 
     let name = wide("Local\\dictate-single-instance");
     let m = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
     if m.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        // Already running: launching it again opens the settings of the running copy.
+        // Already running: launching it again opens the settings of the running copy
+        // (`--page general|recognition|app|history` picks the page).
+        let page = std::env::args()
+            .skip_while(|a| a != "--page")
+            .nth(1)
+            .and_then(|p| settings::Page::parse(&p))
+            .unwrap_or(settings::Page::General);
         let class = wide("dictate-tray");
         let other = unsafe { FindWindowW(class.as_ptr(), null()) };
         if other.is_null() {
@@ -136,7 +169,7 @@ fn main() {
         } else {
             unsafe {
                 AllowSetForegroundWindow(ASFW_ANY);
-                PostMessageW(other, WM_OPEN_SETTINGS, 0, 0);
+                PostMessageW(other, WM_OPEN_SETTINGS, page.index(), 0);
             }
         }
         return;
@@ -153,6 +186,8 @@ fn main() {
     };
     i18n::set(i18n::resolve(&cfg.ui_language));
     let ui_lang = cfg.ui_language.clone();
+    let history = History::new(cfg.history, log::data_dir().map(|d| d.join("history.txt")));
+    history.extend(carried);
     log::write(&format!("start: model={} hotkey={} beam={}", cfg.model.display(), cfg.hotkey_name, cfg.beam_size));
     let _ = SHARED.set(Shared {
         cfg,
@@ -164,6 +199,8 @@ fn main() {
         last: Mutex::new(String::new()),
         preview: Mutex::new(String::new()),
         ui_lang: Mutex::new(ui_lang),
+        history,
+        to_clipboard: Mutex::new(None),
     });
 
     let hwnd = match create_window() {
@@ -250,6 +287,12 @@ fn engine_thread(rx: Receiver<Vec<f32>>) {
             Ok(Some(t)) => {
                 let mut text = t.text;
                 set_preview(text.clone()); // the bubble fades out showing exactly what was typed
+                sh.history.add(&text);
+                post(WM_HISTORY);
+                if sh.cfg.clipboard {
+                    *sh.to_clipboard.lock().unwrap() = Some(text.clone());
+                    post(WM_COPY_TEXT);
+                }
                 if sh.cfg.append_space {
                     text.push(' ');
                 }
@@ -459,6 +502,7 @@ fn show_menu(hwnd: HWND) {
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         add(MF_STRING, ID_SETTINGS, t(T::MenuSettings));
+        add(MF_STRING, ID_HISTORY, t(T::MenuHistory));
 
         // Interface language submenu: system default + each language in its own name.
         let langs = CreatePopupMenu();
@@ -488,11 +532,11 @@ fn show_menu(hwnd: HWND) {
     }
 }
 
-fn open_settings() {
+fn open_settings(page: settings::Page) {
     let sh = shared();
     // Re-read the file so the window shows what is on disk, not what this process started with.
     let cfg = config::load_or_create(&sh.cfg_path).unwrap_or_else(|_| sh.cfg.clone());
-    settings::open(&cfg, sh.cfg_path.clone(), restart);
+    settings::open(&cfg, sh.cfg_path.clone(), restart, page);
 }
 
 fn restart() {
@@ -501,7 +545,22 @@ fn restart() {
         unsafe { CloseHandle(m as HANDLE) };
     }
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(exe).spawn();
+        let sh = shared();
+        let carry = if sh.history.mode() == history::Mode::Session { sh.history.entries() } else { Vec::new() };
+        if carry.is_empty() {
+            let _ = std::process::Command::new(exe).spawn();
+        } else {
+            // In-memory history goes to the new process through a pipe, never to disk.
+            let child = std::process::Command::new(exe)
+                .env(HANDOFF_ENV, "1")
+                .stdin(std::process::Stdio::piped())
+                .spawn();
+            if let Ok(mut c) = child
+                && let Some(mut stdin) = c.stdin.take()
+            {
+                let _ = std::io::Write::write_all(&mut stdin, history::encode_all(&carry).as_bytes());
+            }
+        }
     }
     unsafe { PostQuitMessage(0) };
 }
@@ -513,7 +572,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if ev == WM_CONTEXTMENU || ev == WM_RBUTTONUP {
                 show_menu(hwnd);
             } else if ev == WM_LBUTTONUP {
-                open_settings();
+                open_settings(settings::Page::General);
             }
             0
         }
@@ -535,7 +594,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             0
         }
         WM_OPEN_SETTINGS => {
-            open_settings();
+            open_settings(settings::Page::from_index(wp));
+            0
+        }
+        WM_HISTORY => {
+            settings::history_changed();
+            0
+        }
+        WM_COPY_TEXT => {
+            if let Some(text) = shared().to_clipboard.lock().unwrap().take()
+                && let Err(e) = clipboard::set_text(hwnd, &text)
+            {
+                set_error(e);
+            }
             0
         }
         WM_SHOW_ERROR => {
@@ -546,7 +617,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_COMMAND => {
             match wp & 0xFFFF {
-                ID_SETTINGS => open_settings(),
+                ID_SETTINGS => open_settings(settings::Page::General),
+                ID_HISTORY => open_settings(settings::Page::History),
                 ID_LOG => {
                     if let Some(p) = log::path() {
                         open_path(&p);

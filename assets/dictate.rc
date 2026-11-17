@@ -1,0 +1,2 @@
+// App icon, embedded by build.rs (Windows only). Regenerate the .ico with tools/make_icon.py.
+1 ICON "dictate.ico"

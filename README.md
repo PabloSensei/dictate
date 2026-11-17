@@ -44,7 +44,7 @@ Electron bundles you have to take on trust. **dictate** is a small native Window
 - **It is fast.** A five-second phrase is recognized in about **0.16 s** on an RTX 4070 Ti
   with Whisper large-v3-turbo, and the model stays loaded, so there is no warm-up.
 - **It works everywhere you type.** Text is entered as keyboard input into any window:
-  editors, browsers, chat apps, terminals. The clipboard is never used.
+  editors, browsers, chat apps, terminals. The clipboard is used only if you turn it on.
 - **It stays out of the way.** It lives in the tray. A small animated bubble shows that it
   is listening, and optionally the words as you say them.
 
@@ -61,14 +61,22 @@ Electron bundles you have to take on trust. **dictate** is a small native Window
   keeps getting wrong.
 - 🔇 **Voice activity detection.** Silero VAD skips silence and noise, so Whisper doesn't
   invent text for an accidental key press.
-- ⚙️ **Native settings window.** Inspired by macOS, with light and dark themes and live
-  switching between English, Русский, Polski, and Українська.
+- 🕘 **History.** Every dictation with its time, searchable, one click to copy. It is kept in
+  memory by default and saved to disk only if you choose to.
+- 📋 **Copy to clipboard.** Optionally copy each dictation as well as typing it, ready to
+  paste anywhere. Copies are kept out of Windows' cloud clipboard sync.
+- ⚙️ **Native settings window.** Inspired by macOS, with a sidebar, light and dark themes,
+  and live switching between English, Русский, Polski, and Українська.
 - 🚀 **Start with Windows.** One switch, per user, no admin rights needed.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/settings-dark.png">
-    <img alt="Settings window with Controls, Recognition, and Interface sections: shortcut key, hold or toggle mode, speech language, model hint, bubble position, live text, interface language, and start with Windows" src="docs/settings-light.png" width="520">
+    <img alt="Settings window: a sidebar with General, Recognition, Application and History pages; the General page shows the shortcut key, hold or toggle mode, bubble position and live text" src="docs/settings-light.png" width="49%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/history-dark.png">
+    <img alt="History page: a search field, a Clear button, and recent dictations with their time and a Copy button" src="docs/history-light.png" width="49%">
   </picture>
 </p>
 
@@ -117,7 +125,8 @@ SHA-256.
 | **Dictate** | Hold the hotkey (default **Right Ctrl**) and speak. Release it to type the text. |
 | **Toggle mode** | Tap to start, tap again to finish. **Esc** cancels. |
 | **Settings** | Left-click the tray icon, or run `dictate.exe` again. |
-| **Tray menu** | Right-click: settings, interface language, start with Windows, log, restart, quit. |
+| **History** | Tray menu → **History…**, or the History page in the settings. Search, copy, or clear. |
+| **Tray menu** | Right-click: settings, history, interface language, start with Windows, log, restart, quit. |
 
 The **tray icon** shows the state at a glance: 🟠 loading the model, ⚪ ready,
 🔴 listening, 🔵 recognizing, 🟣 error (hover over it for details).
@@ -146,6 +155,8 @@ comment for every option. The settings window edits the same file and keeps your
 | `beam_size` | `5` | `1` is greedy and fastest; `5` is a bit more accurate. |
 | `use_gpu`, `threads` | `true`, `4` | GPU on or off; CPU threads |
 | `append_space` | `true` | Adds a space after each phrase. |
+| `clipboard` | `false` | Also copies each dictation to the clipboard. |
+| `history` | `session` | `session` keeps it in memory until the app quits, `disk` also saves it, `off` keeps nothing |
 | `overlay` | `bottom` | Bubble position: `bottom`, `center` or `off` |
 | `live_preview` | `true` | Shows text under the bubble while you speak. |
 | `ui_language` | `auto` | `auto` follows Windows; or `en`, `ru`, `pl`, `uk` |
@@ -185,10 +196,16 @@ dictate was written for people who would rather not trust a dictation app blindl
 - **The microphone is open only while you dictate**, so the Windows microphone indicator is
   lit only then. Audio stays in memory and is never written to disk.
 - **No keyboard hook.** One key is polled with `GetAsyncKeyState`. Text is typed with
-  `SendInput` (Unicode), and the clipboard is never read or written.
+  `SendInput` (Unicode). The clipboard is never read; dictate writes to it only when you
+  turn on **Copy to clipboard** or press **Copy** in the history, and marks those copies so
+  Windows doesn't sync them to the cloud clipboard.
 - **Verified models.** Model files are checked against a SHA-256 hash on every start.
   `tools/convert_hf_to_ggml.py` converts Hugging Face `safetensors` checkpoints using only
   numpy: no pickle, no PyTorch, no remote code.
+- **Dictated text stays in memory.** The history lives in RAM and is gone when the app
+  quits, unless you set it to **On disk**, which keeps a plain-text file
+  `%LOCALAPPDATA%\dictate\history.txt` (not encrypted). Restarting after saving the
+  settings hands the in-memory history to the new process through a pipe, not a file.
 - **The log contains no text.** `%LOCALAPPDATA%\dictate\dictate.log` records only
   timings and errors.
 - **Nothing runs elevated.** Autostart is one value under `HKCU\…\Run`.
@@ -297,6 +314,7 @@ The first build takes a while because it compiles the CUDA kernels; rebuilds tak
 | `src/i18n.rs` | Interface strings in four languages (a test checks they are complete) |
 | `src/replace.rs` | Autocorrect rules |
 | `src/autostart.rs` | Start with Windows (`HKCU\…\Run`) |
+| `src/history.rs`, `src/clipboard.rs` | Dictation history (memory or file) and clipboard copies |
 | `src/bin/bench.rs` | `dictate-bench`: record, compare models, render the bubble |
 | `tools/convert_hf_to_ggml.py` | Hugging Face → GGML converter without PyTorch |
 

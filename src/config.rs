@@ -50,6 +50,12 @@ threads = 4
 
 # Add a space after each inserted phrase.
 append_space = true
+# Also copy each dictation to the clipboard (it is typed either way). Not synced to
+# the cloud clipboard.
+clipboard = false
+# Dictation history (tray menu > History): session = in memory until the app quits,
+# disk = also saved to %LOCALAPPDATA%\dictate\history.txt, off = not kept.
+history = session
 
 # Animated bubble while dictating, on the monitor with the mouse: bottom | center | off.
 overlay = bottom
@@ -126,6 +132,9 @@ pub struct Config {
     pub use_gpu: bool,
     pub threads: i32,
     pub append_space: bool,
+    /// Copy each dictation to the clipboard too.
+    pub clipboard: bool,
+    pub history: crate::history::Mode,
 }
 
 impl Default for Config {
@@ -187,6 +196,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
         use_gpu: true,
         threads: 4,
         append_space: true,
+        clipboard: false,
+        history: crate::history::Mode::Session,
     };
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim().trim_start_matches('\u{feff}');
@@ -218,6 +229,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "use_gpu" => c.use_gpu = parse_bool(v).ok_or_else(|| bad(k))?,
             "threads" => c.threads = v.parse().map_err(|_| bad(k))?,
             "append_space" => c.append_space = parse_bool(v).ok_or_else(|| bad(k))?,
+            "clipboard" => c.clipboard = parse_bool(v).ok_or_else(|| bad(k))?,
+            "history" => c.history = crate::history::Mode::parse(v).ok_or_else(|| bad(k))?,
             "overlay" => c.overlay = Overlay::parse(v).ok_or_else(|| bad(k))?,
             "mode" => c.mode = Mode::parse(v).ok_or_else(|| bad(k))?,
             "live_preview" => c.live_preview = parse_bool(v).ok_or_else(|| bad(k))?,
