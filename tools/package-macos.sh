@@ -17,7 +17,7 @@ if [ "$arch" = arm64 ]; then
 else
     export GGML_NATIVE=OFF GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON
 fi
-cargo build --release --no-default-features "${features[@]}"
+cargo build --release --no-default-features ${features[@]+"${features[@]}"}
 
 out=dist-out
 app="$out/Dictate.app"
