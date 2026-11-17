@@ -37,14 +37,19 @@ cleanup() {
 
 # TCP, because some setups (WSLg) don't let Xvfb create its socket in /tmp/.X11-unix
 export DISPLAY=127.0.0.1:99
-Xvfb :99 -listen tcp -ac -screen 0 1600x900x24 +extension COMPOSITE >/dev/null 2>&1 &
+Xvfb :99 -listen tcp -ac -screen 0 1600x900x24 +extension COMPOSITE >"$out/xvfb.log" 2>&1 &
 XVFB=$!
-sleep 1
+for _ in $(seq 40); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.25; done
+xdpyinfo >/dev/null 2>&1 || fail "Xvfb did not start: $(tail -5 "$out/xvfb.log")"
 xev -event keyboard -geometry 500x200+50+50 -name dictate-target >"$out/xev.log" 2>&1 &
 XEV=$!
-sleep 1
-target=$(xdotool search --name dictate-target | head -1)
-[ -n "$target" ] || fail "no xev window"
+target=
+for _ in $(seq 40); do
+    target=$(xdotool search --name dictate-target 2>/dev/null | head -1)
+    [ -n "$target" ] && break
+    sleep 0.25
+done
+[ -n "$target" ] || fail "no xev window: $(cat "$out/xev.log")"
 xdotool windowfocus "$target"
 
 : >"$log"
