@@ -72,6 +72,34 @@ pub(crate) fn live_push(s: &[f32]) {
 
 pub(crate) type CaptureResult = Result<Vec<f32>, String>;
 
+/// For end-to-end tests without a microphone (CI, VMs): `DICTATE_FAKE_MIC=<16 kHz wav>`
+/// "records" that file in real time, then silence, until stopped.
+fn fake_capture(wav: &std::path::Path, stop: Arc<AtomicBool>, ready: mpsc::Sender<Result<(), String>>, max_samples: usize) -> CaptureResult {
+    let pcm = match crate::wav::read_16k_mono(wav) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = ready.send(Err(e.clone()));
+            return Err(e);
+        }
+    };
+    live_reset();
+    let _ = ready.send(Ok(()));
+    let mut out = Vec::new();
+    let block = SAMPLE_RATE as usize / 20;
+    let mut pos = 0;
+    while !stop.load(Ordering::Acquire) && out.len() < max_samples {
+        let chunk: Vec<f32> = (pos..pos + block).map(|i| pcm.get(i).copied().unwrap_or(0.0)).collect();
+        pos += block;
+        live_push(&chunk);
+        LEVEL.store(loudness(&chunk).to_bits(), Ordering::Relaxed);
+        out.extend_from_slice(&chunk);
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+    LEVEL.store(0, Ordering::Relaxed);
+    live_reset();
+    Ok(out)
+}
+
 pub struct Recorder {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<CaptureResult>>,
@@ -86,7 +114,10 @@ impl Recorder {
         let max_samples = (max_seconds.max(1) * SAMPLE_RATE) as usize;
         let handle = thread::Builder::new()
             .name("audio".into())
-            .spawn(move || capture(stop2, ready_tx, max_samples))
+            .spawn(move || match std::env::var_os("DICTATE_FAKE_MIC") {
+                Some(wav) => fake_capture(std::path::Path::new(&wav), stop2, ready_tx, max_samples),
+                None => capture(stop2, ready_tx, max_samples),
+            })
             .map_err(|e| format!("audio thread: {e}"))?;
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self { stop, handle: Some(handle) }),

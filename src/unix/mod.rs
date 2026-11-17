@@ -106,12 +106,19 @@ pub fn missing_model_hint(model: &Path) -> Option<String> {
     if model.exists() {
         return None;
     }
-    let dir = model.parent().and_then(Path::parent).unwrap_or(Path::new("."));
+    let script = if cfg!(target_os = "macos") {
+        "\"/Applications/Dictate.app/Contents/Resources/download-models.sh\"".to_string()
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("download-models.sh")))
+            .filter(|p| p.exists())
+            .map(|p| format!("\"{}\"", p.display()))
+            .unwrap_or_else(|| "./download-models.sh".into())
+    };
     Some(format!(
-        "Speech model not found: {}\nDownload it (about 0.5 GB) with:\n  {}download-models.sh \"{}\"\nthen restart dictate.",
-        model.display(),
-        if cfg!(target_os = "macos") { "/Applications/Dictate.app/Contents/Resources/" } else { "./" },
-        dir.display()
+        "Speech model not found: {}\nDownload it (about 0.5 GB) in a terminal:\n  {script}\nthen restart dictate.",
+        model.display()
     ))
 }
 
