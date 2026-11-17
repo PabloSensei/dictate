@@ -73,7 +73,7 @@ impl Engine {
                 let path = check_file(p, cfg.vad_model_sha256.as_ref(), "VAD model")?;
                 let mut vp = WhisperVadContextParams::new();
                 vp.set_use_gpu(false); // tiny model; keep the GPU for whisper
-                vp.set_n_threads(cfg.threads.max(1));
+                vp.set_n_threads(usable_threads(cfg.threads));
                 Some(WhisperVadContext::new(&path, vp).map_err(|e| format!("VAD: {e}"))?)
             }
             None => None,
@@ -90,7 +90,7 @@ impl Engine {
             prompt: cfg.prompt.clone(),
             replace: cfg.replace.clone(),
             beam_size: cfg.beam_size,
-            threads: cfg.threads.max(1),
+            threads: usable_threads(cfg.threads),
         };
         // Warm-up so the first real phrase doesn't pay for CUDA kernel/graph setup.
         let _ = engine.run(&vec![0.0f32; SR]);
@@ -253,6 +253,14 @@ pub fn is_hallucination(text: &str) -> bool {
         "you",
     ];
     BAD.contains(&n.as_str()) || ["субтитры", "редактор субтитров", "subtitles by"].iter().any(|p| n.starts_with(p))
+}
+
+/// The configured thread count, but never more than the CPUs this process may use:
+/// ggml's threads spin while they wait, so oversubscribing a small machine or VM makes
+/// recognition many times slower instead of a little.
+pub fn usable_threads(configured: i32) -> i32 {
+    let cpus = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(4);
+    configured.clamp(1, cpus.max(1))
 }
 
 #[cfg(test)]

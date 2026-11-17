@@ -84,6 +84,7 @@ jobs:
       - name: Download models
         run: ./download-models.sh
       - name: Transcribe a test phrase (whisper.cpp build check)
+        timeout-minutes: 20
         run: |
           say -o /tmp/speech.aiff "Hello world. This is a dictation test on a Mac."
           afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/speech.aiff /tmp/speech.wav
@@ -97,7 +98,8 @@ jobs:
           mv e2e-bench.txt e2e-out/
           rm -rf /Applications/Dictate.app && cp -R dist-out/Dictate.app /Applications/
           open /Applications/Dictate.app
-          for i in $(seq 60); do
+          # CI Macs are VMs without a real GPU: Metal there takes minutes to load a model
+          for i in $(seq 360); do
             grep -q "model loaded" "$HOME/Library/Application Support/dictate/dictate.log" 2>/dev/null && break
             sleep 1
           done

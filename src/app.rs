@@ -229,7 +229,11 @@ fn engine_thread(rx: Receiver<Vec<f32>>) {
             return;
         }
     };
-    log::write(&format!("model loaded in {:.1}s", t0.elapsed().as_secs_f32()));
+    log::write(&format!(
+        "model loaded in {:.1}s, {} threads",
+        t0.elapsed().as_secs_f32(),
+        dictate::engine::usable_threads(sh.cfg.threads)
+    ));
     sh.ready.store(true, Ordering::Release);
     post(UiEvent::Refresh);
 
