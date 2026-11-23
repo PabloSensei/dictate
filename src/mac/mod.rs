@@ -33,6 +33,7 @@ const TAG_RESTART: isize = 3;
 const TAG_QUIT: isize = 4;
 const TAG_AUTOSTART: isize = 5;
 const TAG_ACCESSIBILITY: isize = 6;
+const TAG_UPDATE: isize = 7;
 const TAG_LANG: isize = 100; // 100 = system, 101.. = i18n::LANGS
 const TAG_MIC: isize = 500; // 500 = system default, 501.. = MIC_NAMES
 const TAG_HISTORY: isize = 1000;
@@ -169,6 +170,20 @@ fn cg_image(px: &[u32], w: usize, h: usize, premultiplied: bool) -> Option<CFRet
     }
 }
 
+/// A two-button question; true = the first (default) button.
+fn ask(title: &str, text: &str, yes: &str, no: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    let app = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    let a = NSAlert::new(mtm);
+    a.setMessageText(&ns(title));
+    a.setInformativeText(&ns(text));
+    a.addButtonWithTitle(&ns(yes));
+    a.addButtonWithTitle(&ns(no));
+    a.runModal() == 1000 // NSAlertFirstButtonReturn
+}
+
 fn alert(title: &str, text: &str) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let app = NSApplication::sharedApplication(mtm);
@@ -257,6 +272,7 @@ pub fn main() {
     with_ui(|ui| ui.refresh_item());
 
     app::start_threads();
+    app::start_update_checks();
     nsapp.run();
 }
 
@@ -381,7 +397,21 @@ fn handle(ev: UiEvent) {
                 b.anim.set_caption(&text);
             }
         }),
-        UiEvent::History => {}
+        UiEvent::History | UiEvent::UpdateState => {} // menus are built when they open
+        UiEvent::UpdateFound => {
+            if let Some(v) = app::update_available()
+                && ask(t(T::AppName), &i18n::fill(t(T::UpdAsk), &[("v", &v)]), t(T::UpdNow), t(T::UpdLater))
+            {
+                app::update_clicked();
+            }
+        }
+        UiEvent::Note => {
+            if let Some(text) = app::take_note() {
+                alert(t(T::AppName), &text);
+            }
+        }
+        // the installer waits for this process to exit, then opens the new version
+        UiEvent::QuitForUpdate => quit(),
         UiEvent::CopyText => {
             if let Some(text) = app::take_clipboard_text()
                 && let Err(e) = clipboard::set_text(&text)
@@ -503,6 +533,9 @@ fn build_menu(menu: &NSMenu, c: &Controller) {
     let auto_on = std::env::current_exe().is_ok_and(|e| autostart::is_enabled(&e));
     add_item(menu, c, &plain(t(T::MenuAutostartLogin)), TAG_AUTOSTART, true, auto_on);
     separator(menu);
+    let (label, enabled) = app::update_menu_label();
+    add_item(menu, c, &label, TAG_UPDATE, enabled, false);
+    separator(menu);
     add_item(menu, c, &plain(t(T::MenuLog)), TAG_LOG, true, false);
     add_item(menu, c, &plain(t(T::MenuRestart)), TAG_RESTART, true, false);
     separator(menu);
@@ -544,6 +577,7 @@ fn on_menu(tag: isize) {
             quit();
         }
         TAG_QUIT => quit(),
+        TAG_UPDATE => app::update_clicked(),
         t if (TAG_LANG..=TAG_LANG + i18n::LANGS.len() as isize).contains(&t) => {
             let code = if t == TAG_LANG { "auto" } else { i18n::LANGS[(t - TAG_LANG - 1) as usize].code() };
             app::set_ui_language(code);

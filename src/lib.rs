@@ -32,6 +32,7 @@ pub mod replace;
 #[cfg(windows)]
 pub mod surface;
 pub mod trigger;
+pub mod update;
 pub mod wav;
 
 pub fn wide(s: &str) -> Vec<u16> {

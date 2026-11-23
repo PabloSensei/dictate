@@ -31,6 +31,23 @@ pub enum UiEvent {
     History,
     /// `take_clipboard_text()` has text to put on the clipboard.
     CopyText,
+    /// A newer version was found by the automatic check: tell the user once.
+    UpdateFound,
+    /// Update state changed (progress...): refresh the menu.
+    UpdateState,
+    /// `take_note()` has a message for the user (e.g. "you have the latest version").
+    Note,
+    /// The update is unpacked and its installer waits for this process: quit now.
+    QuitForUpdate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Update {
+    None,
+    Available(dictate::update::Release),
+    Checking,
+    /// Download progress, 0..=100.
+    Downloading(String, u32),
 }
 
 /// Set on the new process when restarting: the session history comes on stdin.
@@ -57,6 +74,8 @@ pub struct Shared {
     pub microphone: Mutex<String>,
     /// Text waiting to be put on the clipboard by the main thread.
     to_clipboard: Mutex<Option<String>>,
+    pub update: Mutex<Update>,
+    note: Mutex<Option<String>>,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -102,6 +121,137 @@ pub fn set_preview(text: String) {
     post(UiEvent::Preview);
 }
 
+pub fn take_note() -> Option<String> {
+    shared().note.lock().unwrap().take()
+}
+
+fn note(text: String) {
+    *shared().note.lock().unwrap() = Some(text);
+    post(UiEvent::Note);
+}
+
+/// Background update checks: soon after start, then once a day (if `check_updates`).
+pub fn start_update_checks() {
+    if !shared().cfg.check_updates {
+        return;
+    }
+    let _ = thread::Builder::new().name("update-check".into()).spawn(|| {
+        thread::sleep(Duration::from_secs(8));
+        loop {
+            check_updates(false);
+            thread::sleep(Duration::from_secs(24 * 3600));
+        }
+    });
+}
+
+/// From the menu: check now and always say what came out.
+pub fn check_updates_now() {
+    let _ = thread::Builder::new().name("update-check".into()).spawn(|| check_updates(true));
+}
+
+fn check_updates(manual: bool) {
+    let sh = shared();
+    {
+        let mut u = sh.update.lock().unwrap();
+        if matches!(*u, Update::Downloading(..)) {
+            return;
+        }
+        if manual {
+            *u = Update::Checking;
+        }
+    }
+    post(UiEvent::UpdateState);
+    let current = dictate::update::current_version();
+    let result = dictate::update::check(&current);
+    let found = match result {
+        Ok(Some(rel)) => {
+            log::write(&format!("update available: {}", rel.version));
+            let new = !matches!(&*sh.update.lock().unwrap(), Update::Available(r) if r.version == rel.version);
+            *sh.update.lock().unwrap() = Update::Available(rel);
+            new || manual
+        }
+        Ok(None) => {
+            *sh.update.lock().unwrap() = Update::None;
+            if manual {
+                note(i18n::fill(t(T::UpdLatest), &[("v", &current)]));
+            }
+            false
+        }
+        Err(e) => {
+            log::write(&e);
+            *sh.update.lock().unwrap() = Update::None;
+            if manual {
+                note(format!("{}: {e}", t(T::UpdFailed)));
+            }
+            false
+        }
+    };
+    post(UiEvent::UpdateState);
+    if found {
+        post(UiEvent::UpdateFound);
+    }
+}
+
+/// The version an update is available for, if any.
+pub fn update_available() -> Option<String> {
+    match &*shared().update.lock().unwrap() {
+        Update::Available(r) => Some(r.version.clone()),
+        _ => None,
+    }
+}
+
+/// Menu label for the update item and whether it can be clicked.
+pub fn update_menu_label() -> (String, bool) {
+    match &*shared().update.lock().unwrap() {
+        Update::Available(r) => (i18n::fill(t(T::MenuUpdateTo), &[("v", &r.version)]), true),
+        Update::Downloading(_, p) => (i18n::fill(t(T::UpdDownloading), &[("p", &p.to_string())]), false),
+        Update::Checking => (format!("{}…", t(T::MenuCheckUpdates)), false),
+        Update::None => (format!("{}…", t(T::MenuCheckUpdates)), true),
+    }
+}
+
+/// The update menu item was clicked: install the found version, or check for one.
+pub fn update_clicked() {
+    let rel = match &*shared().update.lock().unwrap() {
+        Update::Available(r) => r.clone(),
+        Update::None => {
+            check_updates_now();
+            return;
+        }
+        _ => return,
+    };
+    let _ = thread::Builder::new().name("update".into()).spawn(move || install_update(rel));
+}
+
+fn install_update(rel: dictate::update::Release) {
+    let sh = shared();
+    let version = rel.version.clone();
+    let set = |p: u32| {
+        *sh.update.lock().unwrap() = Update::Downloading(version.clone(), p);
+        post(UiEvent::UpdateState);
+    };
+    set(0);
+    log::write(&format!("updating to {}", rel.version));
+    let result = dictate::update::download(&rel, &|p| {
+        let changed = !matches!(&*sh.update.lock().unwrap(), Update::Downloading(_, q) if *q == p);
+        if changed {
+            set(p);
+        }
+    })
+    .and_then(|archive| dictate::update::install(&archive));
+    match result {
+        Ok(()) => {
+            log::write("update ready, restarting");
+            post(UiEvent::QuitForUpdate);
+        }
+        Err(e) => {
+            *sh.update.lock().unwrap() = Update::Available(rel);
+            post(UiEvent::UpdateState);
+            set_error(format!("{}: {e}", t(T::UpdFailed)));
+        }
+    }
+}
+
 pub fn take_clipboard_text() -> Option<String> {
     shared().to_clipboard.lock().unwrap().take()
 }
@@ -144,6 +294,8 @@ pub fn init(cfg: Config, cfg_path: PathBuf, carried: Vec<Entry>) {
         history,
         microphone: Mutex::new(microphone),
         to_clipboard: Mutex::new(None),
+        update: Mutex::new(Update::None),
+        note: Mutex::new(None),
     });
 }
 

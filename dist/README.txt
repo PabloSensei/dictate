@@ -16,8 +16,16 @@ GETTING STARTED
 4. Click into any text field, hold Right Ctrl, speak, and release.
 
 Left-click the tray icon to open the settings: hotkey, hold or toggle mode,
-speech language, vocabulary hint, bubble, copy to clipboard, history, interface
-language, start with Windows. Tray menu > History... shows what you dictated.
+microphone, speech language, vocabulary hint, bubble, copy to clipboard, history,
+interface language, start with Windows, update check. Tray menu > History...
+shows what you dictated.
+
+UPDATES
+
+At startup dictate asks GitHub whether a newer version is out. If so, a balloon
+says so: click it, or tray menu > Update to ..., and dictate downloads the new
+zip, checks its SHA-256, replaces its files (dictate.ini and models stay) and
+restarts. Turn the check off in Settings > Application.
 
 REQUIREMENTS
 
@@ -32,12 +40,13 @@ REQUIREMENTS
 
 PRIVACY
 
-dictate has no network code. Audio stays in memory and text is typed with
+dictate has no network code of its own. Audio stays in memory and text is typed with
 SendInput. The clipboard is used only if you turn on "Copy to clipboard" or press
 Copy in the history. The history is kept in memory until you quit, unless you
 choose "On disk". The log (%LOCALAPPDATA%\dictate\dictate.log) holds only
-timings and errors. The only download is download-models.cmd, which
-you run yourself.
+timings and errors. Downloads are made by tools you can see: download-models.cmd
+for the models, and Windows' curl.exe for the update check (api.github.com, at
+startup and once a day) and for updates you start. No audio or text is sent.
 
 FILES
 

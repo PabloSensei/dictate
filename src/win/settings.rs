@@ -142,7 +142,7 @@ impl Page {
                 (T::SecOutput, &[RowKind::Space, RowKind::Clipboard]),
             ],
             Page::App => &[
-                (T::SecInterface, &[RowKind::UiLang, RowKind::Autostart]),
+                (T::SecInterface, &[RowKind::UiLang, RowKind::Autostart, RowKind::Updates]),
                 (T::PageHistory, &[RowKind::HistoryMode]),
             ],
             Page::History => &[],
@@ -164,6 +164,7 @@ enum Hit {
     Autostart,
     HistoryMode,
     Mic,
+    Updates,
     Copy(usize),
     Clear,
     File,
@@ -185,11 +186,12 @@ enum RowKind {
     Autostart,
     HistoryMode,
     Mic,
+    Updates,
 }
 
 fn row_h(k: RowKind) -> f32 {
     match k {
-        RowKind::Key | RowKind::Mode | RowKind::Live | RowKind::Clipboard | RowKind::HistoryMode | RowKind::Mic => 60.0,
+        RowKind::Key | RowKind::Mode | RowKind::Live | RowKind::Clipboard | RowKind::HistoryMode | RowKind::Mic | RowKind::Updates => 60.0,
         RowKind::Prompt => 118.0,
         _ => 48.0,
     }
@@ -405,6 +407,7 @@ struct St {
     live: bool,
     space: bool,
     clipboard: bool,
+    check_updates: bool,
     history_mode: history::Mode,
     /// Microphone name, "" = system default.
     mic: String,
@@ -436,6 +439,7 @@ struct St {
     a_live: f32,
     a_auto: f32,
     a_clip: f32,
+    a_upd: f32,
     last_anim: Instant,
     cfg_path: PathBuf,
     on_saved: fn(),
@@ -643,6 +647,7 @@ unsafe fn create(cfg: &Config, cfg_path: PathBuf, on_saved: fn(), page: Page) {
             live: cfg.live_preview,
             space: cfg.append_space,
             clipboard: cfg.clipboard,
+            check_updates: cfg.check_updates,
             history_mode: cfg.history,
             mic: cfg.microphone.clone(),
             ui_lang: cfg.ui_language.clone(),
@@ -668,6 +673,7 @@ unsafe fn create(cfg: &Config, cfg_path: PathBuf, on_saved: fn(), page: Page) {
             a_live: b(cfg.live_preview),
             a_auto: b(auto_on),
             a_clip: b(cfg.clipboard),
+            a_upd: b(cfg.check_updates),
             last_anim: Instant::now(),
             cfg_path,
             on_saved,
@@ -978,6 +984,7 @@ impl St {
                     RowKind::UiLang => (t(T::UiLang), None),
                     RowKind::Autostart => (t(T::Autostart), None),
                     RowKind::Mic => (t(T::Microphone), Some(t(T::MicrophoneSub).to_string())),
+                    RowKind::Updates => (t(T::UpdCheck), Some(t(T::UpdCheckSub).to_string())),
                     RowKind::HistoryMode => (
                         t(T::HistoryMode),
                         Some(
@@ -998,7 +1005,7 @@ impl St {
                     RowKind::Bubble => BUBBLE_W,
                     RowKind::SpeechLang | RowKind::UiLang | RowKind::HistoryMode => POPUP_W,
                     RowKind::Mic => MIC_W,
-                    RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard => 42.0,
+                    RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard | RowKind::Updates => 42.0,
                     RowKind::Prompt => 0.0,
                 };
                 let text_w = CARD_W - 2.0 * ROW_PAD - if ctrl_w > 0.0 { ctrl_w + 14.0 } else { 0.0 };
@@ -1066,11 +1073,12 @@ impl St {
                         popup_button(cv, texts, th, &self.fonts, r, &label, self.tint(th.chip, Hit::Mic));
                         hits.push((Hit::Mic, r));
                     }
-                    RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard => {
+                    RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard | RowKind::Updates => {
                         let (hit, v) = match row {
                             RowKind::Space => (Hit::Space, self.a_space),
                             RowKind::Live => (Hit::Live, self.a_live),
                             RowKind::Clipboard => (Hit::Clipboard, self.a_clip),
+                            RowKind::Updates => (Hit::Updates, self.a_upd),
                             _ => (Hit::Autostart, self.a_auto),
                         };
                         let r = Rect { x: right - 42.0, y: cy - 12.5, w: 42.0, h: 25.0 };
@@ -1397,7 +1405,7 @@ impl St {
         self.hits.iter().find(|(_, r)| r.contains(x, y)).map(|(h, _)| *h)
     }
 
-    fn targets(&self) -> [(f32, f32); 6] {
+    fn targets(&self) -> [(f32, f32); 7] {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         [
             (self.a_mode, b(self.mode == Mode::Toggle)),
@@ -1406,6 +1414,7 @@ impl St {
             (self.a_live, b(self.live)),
             (self.a_auto, b(self.autostart)),
             (self.a_clip, b(self.clipboard)),
+            (self.a_upd, b(self.check_updates)),
         ]
     }
 
@@ -1419,7 +1428,7 @@ impl St {
         self.last_anim = Instant::now();
         let k = (dt * 16.0).min(1.0);
         let tg = self.targets();
-        let mut cur = [self.a_mode, self.a_overlay, self.a_space, self.a_live, self.a_auto, self.a_clip];
+        let mut cur = [self.a_mode, self.a_overlay, self.a_space, self.a_live, self.a_auto, self.a_clip, self.a_upd];
         let mut done = true;
         for (c, (_, target)) in cur.iter_mut().zip(tg) {
             *c += (target - *c) * k;
@@ -1429,7 +1438,7 @@ impl St {
                 done = false;
             }
         }
-        [self.a_mode, self.a_overlay, self.a_space, self.a_live, self.a_auto, self.a_clip] = cur;
+        [self.a_mode, self.a_overlay, self.a_space, self.a_live, self.a_auto, self.a_clip, self.a_upd] = cur;
         if done {
             unsafe { KillTimer(self.hwnd, TIMER_ANIM) };
         }
@@ -1454,6 +1463,7 @@ impl St {
             Hit::Overlay(i) => self.overlay = [Overlay::Bottom, Overlay::Center, Overlay::Off][i as usize % 3],
             Hit::Space => self.space = !self.space,
             Hit::Clipboard => self.clipboard = !self.clipboard,
+            Hit::Updates => self.check_updates = !self.check_updates,
             Hit::Live => self.live = !self.live,
             Hit::Autostart => self.autostart = !self.autostart,
             Hit::Copy(i) => {
@@ -1587,6 +1597,7 @@ impl St {
                 ("live_preview", self.live.to_string()),
                 ("append_space", self.space.to_string()),
                 ("clipboard", self.clipboard.to_string()),
+                ("check_updates", self.check_updates.to_string()),
                 ("history", self.history_mode.as_str().to_string()),
                 ("microphone", self.mic.clone()),
                 ("ui_language", self.ui_lang.clone()),

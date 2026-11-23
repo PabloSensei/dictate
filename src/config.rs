@@ -67,6 +67,10 @@ overlay = bottom
 # Show the text being recognized next to the bubble while you speak (uses the GPU while recording).
 live_preview = true
 
+# Once at startup (and once a day), ask GitHub whether a newer version is out, using the
+# system's curl. Only that request goes out, never audio or text. false = never ask.
+check_updates = true
+
 # Interface language: auto (as in Windows) | en | ru | pl | uk.
 ui_language = auto
 "#;
@@ -160,6 +164,8 @@ pub struct Config {
     pub hotkey_name: String,
     /// Microphone name; empty = the system default.
     pub microphone: String,
+    /// Ask GitHub for a newer version at startup and once a day.
+    pub check_updates: bool,
     pub overlay: Overlay,
     pub mode: Mode,
     pub live_preview: bool,
@@ -237,6 +243,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         hotkey: 0xA3,
         hotkey_name: "RCtrl".into(),
         microphone: String::new(),
+        check_updates: true,
         overlay: Overlay::Bottom,
         mode: Mode::Hold,
         live_preview: true,
@@ -267,6 +274,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "vad_model_sha256" => c.vad_model_sha256 = (!v.is_empty()).then(|| v.to_ascii_lowercase()),
             "language" => c.language = v.to_string(),
             "microphone" => c.microphone = v.to_string(),
+            "check_updates" => c.check_updates = parse_bool(v).ok_or_else(|| bad(k))?,
             "prompt" => c.prompt = v.to_string(),
             "replace" => c.replace.push(Rule::parse(v).ok_or_else(|| {
                 format!("line {}: expected replace = what the model writes => what you want", n + 1)

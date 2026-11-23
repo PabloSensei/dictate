@@ -28,10 +28,11 @@ GETTING STARTED
 SETTINGS
 
 ~/.local/share/dictate/dictate.ini, a plain text file with comments. After editing,
-use tray menu > Restart. Useful keys: hotkey (RCtrl, RAlt, RShift, F9...), mode
-(hold or toggle), language (en, ru, auto...), prompt (names and terms you say
-often), clipboard, history, overlay (bottom, center, off), live_preview, threads
-(set it to your number of physical cores).
+use tray menu > Restart. Tray menu > Microphone picks the microphone. Useful keys:
+hotkey (RCtrl, RAlt, RShift, F9...), mode (hold or toggle), language (en, ru,
+auto...), prompt (names and terms you say often), clipboard, history, overlay
+(bottom, center, off), live_preview, check_updates, threads (set it to your
+number of physical cores).
 
 Speed: the "small" model on the CPU takes about 2-5 s per phrase on a recent
 8-core CPU. "./download-models.sh '' turbo" gets large-v3-turbo: more accurate,
@@ -47,3 +48,12 @@ PRIVACY
 
 Everything runs on your computer. There is no network code in the app; it never
 sends audio or text anywhere. The log (dictate.log) has timings, never text.
+The only request is the update check: at startup (and once a day) the system's
+curl asks api.github.com for the newest version. check_updates = false in
+dictate.ini turns it off.
+
+UPDATES
+
+When a newer version is out, a notification says so and the tray menu offers
+"Update to ...": dictate downloads it, checks its SHA-256, replaces its files
+(dictate.ini and the models stay) and restarts.

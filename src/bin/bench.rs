@@ -68,6 +68,21 @@ fn real_main() -> Result<(), String> {
         Some("record") if o.pos.len() == 3 => record(Path::new(&o.pos[1]), Path::new(&o.pos[2]), &o.cfg),
         Some("run") if o.pos.len() >= 3 => run(Path::new(&o.pos[1]), &o.pos[2..], o.cfg),
         Some("file") if o.pos.len() == 3 => file(Path::new(&o.pos[1]), &o.pos[2], o.cfg),
+        // update this copy (the folder of dictate-bench) to the newest release
+        Some("update") => {
+            let current = dictate::update::current_version();
+            match dictate::update::check(&current)? {
+                None => println!("{current} is the newest version"),
+                Some(rel) => {
+                    println!("updating {current} -> {} ({})", rel.version, rel.page);
+                    let archive = dictate::update::download(&rel, &|p| eprint!("{}{p:3}%", 13 as char))?;
+                    eprintln!();
+                    dictate::update::install(&archive)?;
+                    println!("verified; the files are replaced as soon as this process exits");
+                }
+            }
+            Ok(())
+        }
         // the microphones, by the names dictate.ini's `microphone =` takes
         Some("mics") => {
             for name in dictate::audio::input_devices() {

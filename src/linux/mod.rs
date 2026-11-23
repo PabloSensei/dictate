@@ -27,6 +27,7 @@ enum Msg {
     Microphone(String),
     /// The microphone list was re-read: rebuild the menu.
     MicsListed,
+    Update,
     Restart,
     Quit,
 }
@@ -146,6 +147,7 @@ pub fn main() {
         }
     };
     app::start_threads();
+    app::start_update_checks();
     eprintln!("dictate: running. Hold {} and speak.", config::key_label(shared().cfg.hotkey));
     run(rx, tray, bubble, lock);
 }
@@ -190,6 +192,22 @@ fn run(rx: Receiver<Msg>, tray: Option<Handle<DictTray>>, mut bubble: Option<ove
                 }
             }
             Some(Msg::Ui(UiEvent::History)) => refresh_tray(&tray),
+            Some(Msg::Ui(UiEvent::UpdateFound)) => {
+                if let Some(v) = app::update_available() {
+                    notify(&i18n::fill(t(T::UpdAvailable), &[("v", &v)]));
+                }
+                refresh_tray(&tray);
+            }
+            Some(Msg::Ui(UiEvent::UpdateState)) => refresh_tray(&tray),
+            Some(Msg::Ui(UiEvent::Note)) => {
+                if let Some(text) = app::take_note() {
+                    eprintln!("dictate: {text}");
+                    notify(&text);
+                }
+            }
+            // the installer waits for this process to exit, then starts the new version
+            Some(Msg::Ui(UiEvent::QuitForUpdate)) => break,
+            Some(Msg::Update) => app::update_clicked(),
             Some(Msg::Ui(UiEvent::CopyText)) => {
                 if let Some(text) = app::take_clipboard_text()
                     && let Err(e) = clipboard::set_text(&text)
@@ -383,6 +401,9 @@ impl ksni::Tray for DictTray {
             }
             .into(),
         );
+        m.push(MenuItem::Separator);
+        let (label, enabled) = app::update_menu_label();
+        m.push(StandardItem { label, enabled, activate: Box::new(|_| send(Msg::Update)), ..Default::default() }.into());
         m.push(MenuItem::Separator);
         m.push(item(t(T::MenuLog), || Msg::OpenLog));
         m.push(item(t(T::MenuRestart), || Msg::Restart));

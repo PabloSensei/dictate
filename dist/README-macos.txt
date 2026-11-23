@@ -34,9 +34,10 @@ SETTINGS
 
 ~/Library/Application Support/dictate/dictate.ini, a plain text file with comments
 (menu > Settings opens it in TextEdit). After editing, use menu > Restart.
-Useful keys: hotkey (ROption, RCmd, RShift, F13...), mode (hold or toggle),
-language (en, ru, auto...), prompt (names and terms you say often), clipboard,
-history, overlay (bottom, center, off), live_preview.
+Menu > Microphone picks the microphone. Useful keys: hotkey (ROption, RCmd, RShift,
+F13...), mode (hold or toggle), language (en, ru, auto...), prompt (names and
+terms you say often), clipboard, history, overlay (bottom, center, off),
+live_preview, check_updates.
 
 Apple Silicon builds use the GPU (Metal). Intel Macs run on the CPU with the
 "small" model: about 2-5 s per phrase on a recent 6-8 core CPU. On Apple Silicon
@@ -48,6 +49,16 @@ PRIVACY
 
 Everything runs on your Mac. There is no network code in the app; it never
 sends audio or text anywhere. The log (dictate.log) has timings, never text.
+The only request is the update check: at startup (and once a day) the system's
+curl asks api.github.com for the newest version. check_updates = false in
+dictate.ini turns it off.
+
+UPDATES
+
+When a newer version is out, a dialog offers to update (also menu > Update to ...):
+dictate downloads it, checks its SHA-256, replaces Dictate.app (dictate.ini and
+the models stay) and restarts. The app is signed ad hoc, not by an Apple
+developer ID, so macOS may ask for Accessibility and Input Monitoring again.
 
 UNINSTALL
 

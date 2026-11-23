@@ -21,7 +21,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_ERROR, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, ShellExecuteW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -40,6 +40,11 @@ const WM_OPEN_SETTINGS: u32 = WM_APP + 4;
 const WM_PREVIEW: u32 = WM_APP + 5;
 const WM_HISTORY: u32 = WM_APP + 6;
 const WM_COPY_TEXT: u32 = WM_APP + 7;
+const WM_UPDATE_FOUND: u32 = WM_APP + 8;
+const WM_NOTE: u32 = WM_APP + 9;
+const WM_QUIT_UPDATE: u32 = WM_APP + 10;
+/// NOTIFYICON_VERSION_4: the user clicked the balloon.
+const NIN_BALLOONUSERCLICK: u32 = 0x0400 + 5;
 
 const ID_SETTINGS: usize = 10;
 const ID_LOG: usize = 11;
@@ -47,6 +52,7 @@ const ID_RESTART: usize = 12;
 const ID_QUIT: usize = 13;
 const ID_AUTOSTART: usize = 14;
 const ID_HISTORY: usize = 15;
+const ID_UPDATE: usize = 16;
 const ID_LANG_BASE: usize = 30; // 30 = system default, 31.. = i18n::LANGS
 
 static HWND_MAIN: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -69,6 +75,10 @@ fn post_event(ev: UiEvent) {
         UiEvent::Preview => WM_PREVIEW,
         UiEvent::History => WM_HISTORY,
         UiEvent::CopyText => WM_COPY_TEXT,
+        UiEvent::UpdateFound => WM_UPDATE_FOUND,
+        UiEvent::UpdateState => return, // the menu is built when it opens
+        UiEvent::Note => WM_NOTE,
+        UiEvent::QuitForUpdate => WM_QUIT_UPDATE,
     });
 }
 
@@ -136,6 +146,7 @@ pub fn main() {
     tray(NIM_ADD);
 
     app::start_threads();
+    app::start_update_checks();
 
     overlay::init(shared().cfg.overlay);
 
@@ -187,12 +198,21 @@ fn tray(op: u32) {
 }
 
 fn balloon(text: &str) {
+    notify(text, NIIF_ERROR);
+}
+
+/// A balloon with the info icon (an update was found, "you have the latest version"...).
+fn info_balloon(text: &str) {
+    notify(text, NIIF_INFO);
+}
+
+fn notify(text: &str, icon: u32) {
     let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd = HWND_MAIN.load(Ordering::Acquire);
     nid.uID = 1;
     nid.uFlags = NIF_INFO;
-    nid.dwInfoFlags = NIIF_ERROR;
+    nid.dwInfoFlags = icon;
     copy_w(&mut nid.szInfoTitle, t(T::AppName));
     copy_w(&mut nid.szInfo, text);
     unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) };
@@ -242,6 +262,8 @@ fn show_menu(hwnd: HWND) {
 
         let auto_on = std::env::current_exe().is_ok_and(|e| autostart::is_enabled(&e));
         add(MF_STRING | if auto_on { MF_CHECKED } else { 0 }, ID_AUTOSTART, t(T::MenuAutostart));
+        let (label, enabled) = app::update_menu_label();
+        add(MF_STRING | if enabled { 0 } else { MF_GRAYED }, ID_UPDATE, &label);
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         add(MF_STRING, ID_LOG, t(T::MenuLog));
         add(MF_STRING, ID_RESTART, t(T::MenuRestart));
@@ -281,7 +303,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 show_menu(hwnd);
             } else if ev == WM_LBUTTONUP {
                 open_settings(settings::Page::General);
+            } else if ev == NIN_BALLOONUSERCLICK && app::update_available().is_some() {
+                app::update_clicked(); // the "version X is available" balloon
             }
+            0
+        }
+        WM_UPDATE_FOUND => {
+            if let Some(v) = app::update_available() {
+                info_balloon(&i18n::fill(t(T::UpdAvailable), &[("v", &v)]));
+            }
+            0
+        }
+        WM_NOTE => {
+            if let Some(text) = app::take_note() {
+                info_balloon(&text);
+            }
+            0
+        }
+        WM_QUIT_UPDATE => {
+            // the installer waits for this process to exit, then starts the new version
+            unsafe { PostQuitMessage(0) };
             0
         }
         WM_REFRESH => {
@@ -329,6 +370,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     }
                 }
                 ID_RESTART => restart(),
+                ID_UPDATE => app::update_clicked(),
                 ID_AUTOSTART => {
                     if let Ok(exe) = std::env::current_exe() {
                         let on = !autostart::is_enabled(&exe);

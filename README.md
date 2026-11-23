@@ -12,7 +12,7 @@ Whisper runs on your own computer. Nothing ever leaves it.
 <a href="https://github.com/PabloSensei/dictate/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/PabloSensei/dictate/total?color=FF453A"></a>
 <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1F1F23"></a>
 <img alt="Platform: Windows 10/11, macOS and Linux in beta" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-1F1F23">
-<img alt="Network access: none" src="https://img.shields.io/badge/network-none-2EA44F">
+<img alt="Network code: none" src="https://img.shields.io/badge/network%20code-none-2EA44F">
 
 <a href="https://github.com/PabloSensei/dictate/releases/latest"><b>Download</b></a> •
 [Features](#features) •
@@ -39,8 +39,9 @@ Cloud dictation sends your voice to someone else's server. Most local apps are l
 Electron bundles you have to take on trust. **dictate** is a small native Windows app
 (one exe, about 4,500 lines of Rust) that you can read in an evening and build yourself:
 
-- **It never touches the network.** The program has no networking code at all, so you can
-  block it in the firewall and it keeps working.
+- **Your voice never leaves the computer.** The program has no networking code of its own, so
+  you can block it in the firewall and it keeps working. The only request it makes is an
+  optional update check, through the system's `curl`, that you can switch off.
 - **It is fast.** A five-second phrase is recognized in about **0.16 s** on an RTX 4070 Ti
   with Whisper large-v3-turbo, and the model stays loaded, so there is no warm-up.
 - **It works everywhere you type.** Text is entered as keyboard input into any window:
@@ -67,6 +68,11 @@ Electron bundles you have to take on trust. **dictate** is a small native Window
   paste anywhere. Copies are kept out of Windows' cloud clipboard sync.
 - ⚙️ **Native settings window.** Inspired by macOS, with a sidebar, light and dark themes,
   and live switching between English, Русский, Polski, and Українська.
+- 🎤 **Pick the microphone.** Use the system default or a specific one; if it's unplugged,
+  dictate falls back to the default.
+- 🔄 **One-click updates.** At startup dictate asks GitHub whether a newer version is out and
+  offers to install it: download, SHA-256 check and restart in one click. Settings and models
+  stay. Switch it off in the settings if you'd rather check yourself.
 - 🚀 **Start with Windows.** One switch, per user, no admin rights needed.
 
 <p align="center">
@@ -112,10 +118,10 @@ SHA-256.
 
 ### macOS and Linux (beta)
 
-[**v0.3.0-beta.1**](https://github.com/PabloSensei/dictate/releases/tag/v0.3.0-beta.1) brings the
-tray icon, the hotkey, typing, the bubble with live text, history and the clipboard option to
-macOS and Linux. The settings window isn't ported yet: settings live in `dictate.ini`, which the
-tray menu opens, and the tray menu lists recent dictations.
+Since 0.3.0 the same release has builds for macOS and Linux, in beta: the tray icon, the hotkey,
+typing, the bubble with live text, the microphone choice, history, the clipboard option and
+updates. The settings window isn't ported yet: settings live in `dictate.ini`, which the tray
+menu opens, and the tray menu lists recent dictations and the microphones.
 
 | Download | For | Model |
 |---|---|---|
@@ -143,7 +149,7 @@ and on macOS allow Accessibility, Input Monitoring and the microphone. The defau
 | **Toggle mode** | Tap to start, tap again to finish. **Esc** cancels. |
 | **Settings** | Left-click the tray icon, or run `dictate.exe` again. |
 | **History** | Tray menu → **History…**, or the History page in the settings. Search, copy, or clear. |
-| **Tray menu** | Right-click: settings, history, interface language, start with Windows, log, restart, quit. |
+| **Tray menu** | Right-click: settings, history, interface language, start with Windows, check for updates, log, restart, quit. |
 
 The **tray icon** shows the state at a glance: 🟠 loading the model, ⚪ ready,
 🔴 listening, 🔵 recognizing, 🟣 error (hover over it for details).
@@ -209,7 +215,12 @@ dictate was written for people who would rather not trust a dictation app blindl
 
 - **No network code.** The exe imports only audio (`winmm`), windowing (`user32`, `gdi32`,
   `dwmapi`, `shell32`), and CUDA. `dumpbin /imports` shows no `ws2_32`, `wininet`, or
-  `winhttp`. The only download is `download-models.cmd`, a short script you run yourself.
+  `winhttp`. Downloads are done by tools you can see: `download-models.cmd` for the models,
+  and the system's `curl.exe` for the update check (`api.github.com`, at startup and once a
+  day) and for an update you start yourself. That request carries no audio and no text.
+  **Check for updates** off (`check_updates = false`) means no request at all.
+- **Updates are verified.** An update is installed only if its SHA-256 matches the
+  `.sha256` file published with the release; dictate.ini and the models are kept.
 - **The microphone is open only while you dictate**, so the Windows microphone indicator is
   lit only then. Audio stays in memory and is never written to disk.
 - **No keyboard hook.** One key is polled with `GetAsyncKeyState`. Text is typed with
