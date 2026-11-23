@@ -78,7 +78,7 @@ Electron bundles you have to take on trust. **dictate** is a small native Window
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/settings-dark.png">
-    <img alt="Settings window: a sidebar with General, Recognition, Application and History pages; the General page shows the shortcut key, hold or toggle mode, bubble position and live text" src="docs/settings-light.png" width="49%">
+    <img alt="Settings window: a sidebar with General, Recognition, Application and History pages; the General page shows the shortcut key, hold or toggle mode, microphone, bubble position and live text" src="docs/settings-light.png" width="49%">
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/history-dark.png">
