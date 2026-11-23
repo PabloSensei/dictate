@@ -24,11 +24,50 @@ enum Msg {
     Copy(String),
     ToggleAutostart,
     UiLang(&'static str),
+    Microphone(String),
+    /// The microphone list was re-read: rebuild the menu.
+    MicsListed,
     Restart,
     Quit,
 }
 
 static TX: OnceLock<Mutex<Sender<Msg>>> = OnceLock::new();
+/// Microphones for the menu. Listing them (ALSA) is slow, so it runs on a thread at
+/// start and each time the menu opens; the menu shows the latest list.
+static MICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Folder with the tray icons as PNG files, for hosts that load icons by name.
+static ICON_DIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+fn refresh_mics() {
+    std::thread::spawn(|| {
+        let list = dictate::audio::input_devices();
+        let changed = {
+            let mut m = MICS.lock().unwrap();
+            let changed = *m != list;
+            *m = list;
+            changed
+        };
+        if changed {
+            send(Msg::MicsListed);
+        }
+    });
+}
+
+/// Writes dictate-<state>.png for every tray state into the data folder.
+fn write_icons() -> Option<std::path::PathBuf> {
+    let dir = log::data_dir()?.join("icons");
+    std::fs::create_dir_all(&dir).ok()?;
+    for (i, &c) in dictate::icon::LOOK_COLORS.iter().enumerate() {
+        let px = dictate::icon::tray_pixels(64, c);
+        std::fs::write(dir.join(format!("{}.png", icon_name(i))), dictate::icon::png(&px, 64, 64)).ok()?;
+    }
+    Some(dir)
+}
+
+fn icon_name(look: usize) -> String {
+    const NAMES: [&str; 5] = ["loading", "idle", "recording", "busy", "error"];
+    format!("dictate-{}", NAMES.get(look).copied().unwrap_or("idle"))
+}
 
 fn send(m: Msg) {
     if let Some(tx) = TX.get() {
@@ -86,6 +125,8 @@ pub fn main() {
     let _ = TX.set(Mutex::new(tx));
     app::set_poster(post_event);
 
+    let _ = ICON_DIR.set(write_icons());
+    refresh_mics();
     let tray = match (DictTray {}).spawn() {
         Ok(h) => Some(h),
         Err(e) => {
@@ -177,6 +218,11 @@ fn run(rx: Receiver<Msg>, tray: Option<Handle<DictTray>>, mut bubble: Option<ove
                 }
                 refresh_tray(&tray);
             }
+            Some(Msg::Microphone(name)) => {
+                app::set_microphone(&name);
+                refresh_tray(&tray);
+            }
+            Some(Msg::MicsListed) => refresh_tray(&tray),
             Some(Msg::UiLang(code)) => {
                 app::set_ui_language(code);
                 refresh_tray(&tray);
@@ -224,6 +270,20 @@ impl ksni::Tray for DictTray {
 
     fn title(&self) -> String {
         t(T::AppName).into()
+    }
+
+    // Some hosts (older XFCE panels...) re-read the icon by name when it changes;
+    // an empty name there means no icon at all, so name real PNG files too.
+    fn icon_theme_path(&self) -> String {
+        ICON_DIR.get().cloned().flatten().map(|d| d.display().to_string()).unwrap_or_default()
+    }
+
+    fn icon_name(&self) -> String {
+        if ICON_DIR.get().is_some_and(Option::is_some) { icon_name(app::current_look().0 as usize) } else { String::new() }
+    }
+
+    fn menu_about_to_show(&mut self) {
+        refresh_mics();
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -291,10 +351,32 @@ impl ksni::Tray for DictTray {
             );
         }
         m.push(SubMenu { label: t(T::MenuUiLang).into(), submenu: langs, ..Default::default() }.into());
+        // Microphone: system default or one by name (a missing chosen one stays, marked)
+        let current = sh.microphone.lock().unwrap().clone();
+        let mut mics: Vec<(String, String)> = vec![(String::new(), t(T::MicDefault).to_string())];
+        let listed = MICS.lock().unwrap().clone();
+        if !current.is_empty() && !listed.contains(&current) {
+            mics.push((current.clone(), format!("{current} ({})", t(T::MicMissing))));
+        }
+        mics.extend(listed.into_iter().map(|d| (d.clone(), d)));
+        let mic_items: Vec<MenuItem<Self>> = mics
+            .into_iter()
+            .map(|(name, label)| {
+                CheckmarkItem {
+                    label,
+                    checked: name == current,
+                    activate: Box::new(move |_| send(Msg::Microphone(name.clone()))),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect();
+        m.push(SubMenu { label: t(T::Microphone).into(), submenu: mic_items, ..Default::default() }.into());
+
         let auto_on = std::env::current_exe().is_ok_and(|e| autostart::is_enabled(&e));
         m.push(
             CheckmarkItem {
-                label: t(T::MenuAutostart).into(),
+                label: t(T::MenuAutostartLogin).into(),
                 checked: auto_on,
                 activate: Box::new(|_| send(Msg::ToggleAutostart)),
                 ..Default::default()

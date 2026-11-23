@@ -43,6 +43,65 @@ pub fn tray_pixels(s: i32, (r, g, b): (u8, u8, u8)) -> Vec<u32> {
     px
 }
 
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// A PNG file (RGBA, uncompressed deflate) of 0xAARRGGBB straight-alpha pixels:
+/// tray hosts that only take icon files by name get the same picture.
+pub fn png(px: &[u32], w: u32, h: u32) -> Vec<u8> {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = 0xFFFF_FFFFu32;
+        for &b in data {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    // raw scanlines: filter byte 0, then R G B A
+    let mut raw = Vec::with_capacity((w as usize * 4 + 1) * h as usize);
+    for y in 0..h as usize {
+        raw.push(0);
+        for &p in &px[y * w as usize..(y + 1) * w as usize] {
+            raw.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
+        }
+    }
+    // zlib stream with stored (uncompressed) deflate blocks
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
+    for (i, b) in blocks.iter().enumerate() {
+        z.push(u8::from(i + 1 == blocks.len()));
+        let n = b.len() as u16;
+        z.extend_from_slice(&n.to_le_bytes());
+        z.extend_from_slice(&(!n).to_le_bytes());
+        z.extend_from_slice(b);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + x as u32) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+    let mut out = PNG_SIGNATURE.to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -51,5 +110,17 @@ mod tests {
         assert_eq!(px[0] >> 24, 0);
         let center = px[16 * 32 + 16 - 32 * 4]; // on the capsule
         assert_eq!(center, 0xFFFF_FFFF);
+    }
+
+    #[test]
+    fn png_has_the_right_shape() {
+        let px = super::tray_pixels(64, super::LOOK_COLORS[1]);
+        let png = super::png(&px, 64, 64);
+        assert_eq!(&png[..8], &super::PNG_SIGNATURE);
+        assert_eq!(&png[12..16], b"IHDR");
+        assert!(png.ends_with(&[0xAE, 0x42, 0x60, 0x82])); // CRC of an empty IEND
+        // header + IHDR + IDAT (zlib + stored blocks + raw rows) + IEND
+        let raw = (64 * 4 + 1) * 64;
+        assert_eq!(png.len(), 8 + 25 + 12 + 2 + 5 + raw + 4 + 12);
     }
 }

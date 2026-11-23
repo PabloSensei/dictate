@@ -53,6 +53,8 @@ pub struct Shared {
     /// Interface language setting ("auto" or a code), for the tray menu checkmark.
     pub ui_lang: Mutex<String>,
     pub history: History,
+    /// Microphone name, empty = system default. Changeable at runtime (tray menu).
+    pub microphone: Mutex<String>,
     /// Text waiting to be put on the clipboard by the main thread.
     to_clipboard: Mutex<Option<String>>,
 }
@@ -118,6 +120,7 @@ pub fn take_handoff() -> Vec<Entry> {
 /// Sets up the shared state. The caller has loaded the config and set the UI language.
 pub fn init(cfg: Config, cfg_path: PathBuf, carried: Vec<Entry>) {
     let ui_lang = cfg.ui_language.clone();
+    let microphone = cfg.microphone.clone();
     let history = History::new(cfg.history, log::data_dir().map(|d| d.join("history.txt")));
     history.extend(carried);
     log::write(&format!(
@@ -139,6 +142,7 @@ pub fn init(cfg: Config, cfg_path: PathBuf, carried: Vec<Entry>) {
         preview: Mutex::new(String::new()),
         ui_lang: Mutex::new(ui_lang),
         history,
+        microphone: Mutex::new(microphone),
         to_clipboard: Mutex::new(None),
     });
 }
@@ -157,6 +161,18 @@ pub fn set_ui_language(code: &str) {
     i18n::set(i18n::resolve(code));
     *sh.ui_lang.lock().unwrap() = code.to_string();
     if let Err(e) = config::save(&sh.cfg_path, &[("ui_language", code.to_string())]) {
+        set_error(e);
+    }
+}
+
+/// Microphone picked from the tray menu ("" = system default): used from the next
+/// dictation on and saved to dictate.ini. (Windows saves it from the settings window.)
+#[cfg_attr(windows, allow(dead_code))]
+pub fn set_microphone(name: &str) {
+    let sh = shared();
+    *sh.microphone.lock().unwrap() = name.to_string();
+    log::write(if name.is_empty() { "microphone: system default" } else { "microphone: chosen" });
+    if let Err(e) = config::save(&sh.cfg_path, &[("microphone", name.to_string())]) {
         set_error(e);
     }
 }
@@ -341,7 +357,7 @@ fn hotkey_thread(tx: Sender<Vec<f32>>) {
         let esc = trig.recording() && keys::down(keys::VK_ESCAPE);
         for ev in trig.tick(Instant::now(), down, other, esc) {
             match ev {
-                Event::Start => match Recorder::start(sh.cfg.max_record_s) {
+                Event::Start => match Recorder::start(sh.cfg.max_record_s, &sh.microphone.lock().unwrap().clone()) {
                     Ok(r) => rec = Some(r),
                     Err(e) => {
                         trig.abort();

@@ -7,10 +7,12 @@ use std::sync::mpsc;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::Media::Audio::{
-    CALLBACK_EVENT, HWAVEIN, WAVE_FORMAT_PCM, WAVE_MAPPER, WAVEFORMATEX, WAVEHDR, WHDR_DONE,
-    waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
+    CALLBACK_EVENT, HWAVEIN, WAVE_FORMAT_PCM, WAVE_MAPPER, WAVEFORMATEX, WAVEHDR, WAVEINCAPSW, WHDR_DONE,
+    waveInAddBuffer, waveInClose, waveInGetDevCapsW, waveInGetNumDevs, waveInMessage, waveInOpen, waveInPrepareHeader,
+    waveInReset, waveInStart,
     waveInUnprepareHeader,
 };
+use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use super::{CaptureResult, LEVEL, SAMPLE_RATE, live_push, live_reset, loudness};
@@ -38,7 +40,86 @@ impl Drop for Device {
     }
 }
 
-pub(super) fn capture(stop: Arc<AtomicBool>, ready: mpsc::Sender<Result<(), String>>, max_samples: usize) -> CaptureResult {
+/// Short waveIn name (the API cuts it at 31 characters).
+fn short_name(i: u32) -> String {
+    let mut caps: WAVEINCAPSW = unsafe { std::mem::zeroed() };
+    let r = unsafe { waveInGetDevCapsW(i as usize, &mut caps, std::mem::size_of::<WAVEINCAPSW>() as u32) };
+    if r != 0 {
+        return String::new();
+    }
+    let name = caps.szPname;
+    let n = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    String::from_utf16_lossy(&name[..n])
+}
+
+/// The full name Windows shows ("Microphone (DJI MIC MINI)"): the device's endpoint
+/// id from the driver, then its description and interface name from the registry.
+fn full_name(i: u32) -> Option<String> {
+    const DRV_QUERYFUNCTIONINSTANCEIDSIZE: u32 = 0x0812;
+    const DRV_QUERYFUNCTIONINSTANCEID: u32 = 0x0811; // DRV_RESERVED + 17; the size query is + 18
+    let h = i as usize as HWAVEIN;
+    let mut size = 0u32;
+    if unsafe { waveInMessage(h, DRV_QUERYFUNCTIONINSTANCEIDSIZE, &mut size as *mut u32 as usize, 0) } != 0 || size < 4 {
+        return None;
+    }
+    let mut buf = vec![0u16; size as usize / 2];
+    if unsafe { waveInMessage(h, DRV_QUERYFUNCTIONINSTANCEID, buf.as_mut_ptr() as usize, size as usize) } != 0 {
+        return None;
+    }
+    let id = String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(buf.len())]);
+    // "{0.0.1.00000000}.{guid}": the endpoint's key is the second part
+    let guid = id.rsplit_once("}.").map(|(_, g)| g)?;
+    let key = format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{guid}\Properties");
+    let desc = reg_string(&key, "{a45c254e-df1c-4efd-8020-67d146a850e0},2")?; // PKEY_Device_DeviceDesc
+    Some(match reg_string(&key, "{b3f8fa53-0004-438e-9003-51a46e139bfc},6") {
+        // PKEY_DeviceInterface_FriendlyName
+        Some(iface) if !iface.is_empty() => format!("{desc} ({iface})"),
+        _ => desc,
+    })
+}
+
+fn reg_string(key: &str, value: &str) -> Option<String> {
+    let (k, v) = (crate::wide(key), crate::wide(value));
+    let mut buf = vec![0u16; 512];
+    let mut size = (buf.len() * 2) as u32;
+    let r = unsafe {
+        RegGetValueW(HKEY_LOCAL_MACHINE, k.as_ptr(), v.as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut size)
+    };
+    if r != 0 {
+        return None;
+    }
+    let n = (size as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..n]))
+}
+
+/// Microphone names, by waveIn device id: the full name Windows shows, or the
+/// shortened waveIn name if that can't be read.
+pub(super) fn devices() -> Vec<String> {
+    (0..unsafe { waveInGetNumDevs() }).map(|i| full_name(i).unwrap_or_else(|| short_name(i))).collect()
+}
+
+/// The waveIn id for a device name; the system default (the mapper) when it's empty or gone.
+fn device_id(name: &str) -> u32 {
+    if name.is_empty() {
+        return WAVE_MAPPER;
+    }
+    let n = unsafe { waveInGetNumDevs() };
+    let by_full = devices().iter().position(|d| d == name);
+    match by_full.or_else(|| (0..n as usize).find(|&i| short_name(i as u32) == name)) {
+        Some(i) => i as u32,
+        None => {
+            crate::log::write(&format!("microphone \"{name}\" not found, using the default one"));
+            WAVE_MAPPER
+        }
+    }
+}
+
+pub(super) fn capture(
+    stop: Arc<AtomicBool>,
+    ready: mpsc::Sender<Result<(), String>>,
+    max_samples: usize,
+    device: &str,
+) -> CaptureResult {
     let fail = |ready: &mpsc::Sender<Result<(), String>>, msg: String| {
         let _ = ready.send(Err(msg.clone()));
         Err(msg)
@@ -64,7 +145,7 @@ pub(super) fn capture(stop: Arc<AtomicBool>, ready: mpsc::Sender<Result<(), Stri
         wBitsPerSample: 16,
         cbSize: 0,
     };
-    let r = unsafe { waveInOpen(&mut dev.hwi, WAVE_MAPPER, &fmt, event as usize, 0, CALLBACK_EVENT) };
+    let r = unsafe { waveInOpen(&mut dev.hwi, device_id(device), &fmt, event as usize, 0, CALLBACK_EVENT) };
     if r != 0 {
         dev.hwi = null_mut();
         return fail(&ready, format!("microphone unavailable (waveInOpen = {r})"));

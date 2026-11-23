@@ -34,6 +34,7 @@ const TAG_QUIT: isize = 4;
 const TAG_AUTOSTART: isize = 5;
 const TAG_ACCESSIBILITY: isize = 6;
 const TAG_LANG: isize = 100; // 100 = system, 101.. = i18n::LANGS
+const TAG_MIC: isize = 500; // 500 = system default, 501.. = MIC_NAMES
 const TAG_HISTORY: isize = 1000;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -121,6 +122,8 @@ thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
     /// Full texts behind the History menu items, by tag offset.
     static HISTORY_TEXTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Microphone names behind the Microphone menu items, by tag offset.
+    static MIC_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 fn with_ui(f: impl FnOnce(&mut Ui)) {
@@ -477,8 +480,28 @@ fn build_menu(menu: &NSMenu, c: &Controller) {
     for (i, l) in i18n::LANGS.iter().enumerate() {
         add_item(&langs, c, l.native_name(), TAG_LANG + 1 + i as isize, true, ui_lang == l.code());
     }
+    let mics = add_submenu(menu, t(T::Microphone));
+    let current = sh.microphone.lock().unwrap().clone();
+    add_item(&mics, c, t(T::MicDefault), TAG_MIC, true, current.is_empty());
+    separator(&mics);
+    let connected = dictate::audio::input_devices();
+    let mut names = connected.clone();
+    if !current.is_empty() && !names.contains(&current) {
+        names.insert(0, current.clone()); // chosen but not connected: keep it visible
+    }
+    MIC_NAMES.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for (i, name) in names.into_iter().enumerate() {
+            let label =
+                if connected.contains(&name) { name.clone() } else { format!("{name} ({})", t(T::MicMissing)) };
+            add_item(&mics, c, &label, TAG_MIC + 1 + i as isize, true, name == current);
+            m.push(name);
+        }
+    });
+
     let auto_on = std::env::current_exe().is_ok_and(|e| autostart::is_enabled(&e));
-    add_item(menu, c, &plain(t(T::MenuAutostart)), TAG_AUTOSTART, true, auto_on);
+    add_item(menu, c, &plain(t(T::MenuAutostartLogin)), TAG_AUTOSTART, true, auto_on);
     separator(menu);
     add_item(menu, c, &plain(t(T::MenuLog)), TAG_LOG, true, false);
     add_item(menu, c, &plain(t(T::MenuRestart)), TAG_RESTART, true, false);
@@ -525,6 +548,12 @@ fn on_menu(tag: isize) {
             let code = if t == TAG_LANG { "auto" } else { i18n::LANGS[(t - TAG_LANG - 1) as usize].code() };
             app::set_ui_language(code);
             with_ui(|ui| ui.refresh_item());
+        }
+        TAG_MIC => app::set_microphone(""),
+        t if t > TAG_MIC && t < TAG_HISTORY => {
+            if let Some(name) = MIC_NAMES.with(|m| m.borrow().get((t - TAG_MIC - 1) as usize).cloned()) {
+                app::set_microphone(&name);
+            }
         }
         t if t >= TAG_HISTORY => {
             let text = HISTORY_TEXTS.with(|h| h.borrow().get((t - TAG_HISTORY) as usize).cloned());

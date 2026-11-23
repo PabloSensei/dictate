@@ -5,7 +5,8 @@
 //!   dictate-bench file <audio.wav> <model.bin>    transcribe one file
 //!   dictate-bench bubble <out.bmp>                render bubble frames (light + dark)
 //!   dictate-bench demo <dir> [0xRRGGBB]           frames of the README animation
-//! Options: --prompt "<terms>"  --beam N  --lang en  --vad <silero.bin>  --threads N  --cpu
+//!   dictate-bench mics                            list microphones
+//! Options: --prompt "<terms>"  --beam N  --lang en  --vad <silero.bin>  --threads N  --cpu  --mic <name>
 //! Env: DICTATE_NO_VAD=1, DICTATE_PREVIEW=1 (simulate live preview), DICTATE_DEBUG=1
 
 use std::io::{BufRead, Write};
@@ -53,6 +54,7 @@ fn parse_args() -> Result<Opts, String> {
             "--lang" => cfg.language = val("--lang")?,
             "--vad" => cfg.vad_model = Some(PathBuf::from(val("--vad")?)),
             "--cpu" => cfg.use_gpu = false,
+            "--mic" => cfg.microphone = val("--mic")?,
             "--threads" => cfg.threads = val("--threads")?.parse().map_err(|_| "--threads: a number expected")?,
             _ => pos.push(a),
         }
@@ -66,6 +68,13 @@ fn real_main() -> Result<(), String> {
         Some("record") if o.pos.len() == 3 => record(Path::new(&o.pos[1]), Path::new(&o.pos[2]), &o.cfg),
         Some("run") if o.pos.len() >= 3 => run(Path::new(&o.pos[1]), &o.pos[2..], o.cfg),
         Some("file") if o.pos.len() == 3 => file(Path::new(&o.pos[1]), &o.pos[2], o.cfg),
+        // the microphones, by the names dictate.ini's `microphone =` takes
+        Some("mics") => {
+            for name in dictate::audio::input_devices() {
+                println!("{name}");
+            }
+            Ok(())
+        }
         // self-test of text injection: types the given text into the focused window
         Some("type") if o.pos.len() == 2 => dictate::inject::type_text(&o.pos[1]),
         // renders bubble animation frames over light and dark backgrounds to a BMP
@@ -238,7 +247,7 @@ fn record(dir: &Path, phrases: &Path, cfg: &Config) -> Result<(), String> {
             }
             _ => {}
         }
-        let rec = Recorder::start(cfg.max_record_s)?;
+        let rec = Recorder::start(cfg.max_record_s, &cfg.microphone)?;
         print!("  ● recording... Enter to stop ");
         let _ = std::io::stdout().flush();
         read_line();

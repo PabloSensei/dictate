@@ -17,6 +17,15 @@ mod backend;
 mod backend;
 use backend::capture;
 
+/// Names of the microphones the system has now, in its own order. The names are
+/// what `microphone =` in dictate.ini takes. Empty if listing fails.
+pub fn input_devices() -> Vec<String> {
+    let mut v = backend::devices();
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|n| !n.trim().is_empty() && seen.insert(n.clone()));
+    v
+}
+
 pub const SAMPLE_RATE: u32 = 16_000;
 
 /// Loudness of the latest 50 ms buffer, 0..1 (f32 bits), for the on-screen meter.
@@ -106,8 +115,10 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Opens the default microphone and starts capturing. Returns once audio is flowing.
-    pub fn start(max_seconds: u32) -> Result<Self, String> {
+    /// Opens the microphone named `device` (empty: the system default; one that isn't
+    /// connected falls back to the default) and starts capturing. Returns once audio is flowing.
+    pub fn start(max_seconds: u32, device: &str) -> Result<Self, String> {
+        let device = device.trim().to_string();
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = mpsc::channel();
         let stop2 = stop.clone();
@@ -116,7 +127,7 @@ impl Recorder {
             .name("audio".into())
             .spawn(move || match std::env::var_os("DICTATE_FAKE_MIC") {
                 Some(wav) => fake_capture(std::path::Path::new(&wav), stop2, ready_tx, max_samples),
-                None => capture(stop2, ready_tx, max_samples),
+                None => capture(stop2, ready_tx, max_samples, &device),
             })
             .map_err(|e| format!("audio thread: {e}"))?;
         match ready_rx.recv() {
@@ -151,3 +162,24 @@ impl Drop for Recorder {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Opens every microphone for half a second (the mic indicator blinks), so it is
+    /// opt-in: `cargo test --lib records_from_each_microphone -- --ignored`.
+    #[test]
+    #[ignore]
+    fn records_from_each_microphone() {
+        let devices = input_devices();
+        assert!(!devices.is_empty(), "no microphones");
+        for name in devices.iter().map(String::as_str).chain(["", "no such microphone"]) {
+            let rec = Recorder::start(5, name).unwrap_or_else(|e| panic!("{name:?}: {e}"));
+            thread::sleep(std::time::Duration::from_millis(500));
+            let pcm = rec.stop().unwrap();
+            println!("{name:?}: {} samples", pcm.len());
+            assert!(pcm.len() > SAMPLE_RATE as usize / 4, "{name:?}: {} samples", pcm.len());
+        }
+    }
+}

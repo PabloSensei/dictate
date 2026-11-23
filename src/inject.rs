@@ -209,7 +209,9 @@ mod imp {
             }
             for (&c, &k) in &slot {
                 let s = keysym(c);
-                conn.change_keyboard_mapping(1, k, 2, &[s, s]).map_err(|x| e(&x))?;
+                // the same symbol at both levels of every group (core order: G1L1 G1L2 G2L1 G2L2 ...),
+                // so it types whatever layout (us, ru...) is active
+                conn.change_keyboard_mapping(1, k, 8, &[s; 8]).map_err(|x| e(&x))?;
             }
             conn.sync().map_err(|x| e(&x))?;
             std::thread::sleep(SETTLE);

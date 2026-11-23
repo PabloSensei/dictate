@@ -44,6 +44,10 @@ mode = hold
 min_hold_ms = 300
 max_record_s = 120
 
+# Microphone: empty = the system default, or one microphone by its name as the settings
+# window and the tray menu list it. When that one isn't connected, the default is used.
+microphone =
+
 # 1 = greedy (fastest), 5 = beam search (a bit more accurate).
 beam_size = 5
 use_gpu = true
@@ -154,6 +158,8 @@ pub struct Config {
     pub replace: Vec<Rule>,
     pub hotkey: i32,
     pub hotkey_name: String,
+    /// Microphone name; empty = the system default.
+    pub microphone: String,
     pub overlay: Overlay,
     pub mode: Mode,
     pub live_preview: bool,
@@ -230,6 +236,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         replace: Vec::new(),
         hotkey: 0xA3,
         hotkey_name: "RCtrl".into(),
+        microphone: String::new(),
         overlay: Overlay::Bottom,
         mode: Mode::Hold,
         live_preview: true,
@@ -259,6 +266,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "vad_model" => c.vad_model = (!v.is_empty()).then(|| PathBuf::from(v)),
             "vad_model_sha256" => c.vad_model_sha256 = (!v.is_empty()).then(|| v.to_ascii_lowercase()),
             "language" => c.language = v.to_string(),
+            "microphone" => c.microphone = v.to_string(),
             "prompt" => c.prompt = v.to_string(),
             "replace" => c.replace.push(Rule::parse(v).ok_or_else(|| {
                 format!("line {}: expected replace = what the model writes => what you want", n + 1)

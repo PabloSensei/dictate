@@ -1,5 +1,5 @@
 //! cpal capture (macOS: CoreAudio, Linux: ALSA, which PulseAudio and PipeWire also
-//! serve): the default input device in its own format, mixed down to mono and
+//! serve): the chosen (or default) input device in its own format, mixed down to mono and
 //! resampled to 16 kHz here. The stream is created and dropped on the capture thread.
 
 use std::sync::Arc;
@@ -12,13 +12,51 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 
 use super::{CaptureResult, LEVEL, SAMPLE_RATE, live_push, live_reset, loudness};
 
-pub(super) fn capture(stop: Arc<AtomicBool>, ready: mpsc::Sender<Result<(), String>>, max_samples: usize) -> CaptureResult {
+fn device_name(d: &cpal::Device) -> Option<String> {
+    d.description().ok().map(|desc| desc.name().to_string())
+}
+
+/// The input devices worth offering, with their names. On Linux, ALSA lists every
+/// card under many aliases (hw, plughw, front, dsnoop...) next to virtual devices;
+/// one entry per card (`sysdefault:CARD=...`) is kept. The system default goes through
+/// PipeWire or PulseAudio, which follow the input chosen in the system settings.
+fn listed(host: &cpal::Host) -> Vec<(String, cpal::Device)> {
+    let Ok(it) = host.input_devices() else { return Vec::new() };
+    it.filter(|d| {
+        cfg!(target_os = "macos")
+            || d.description().ok().and_then(|x| x.driver().map(|p| p.starts_with("sysdefault:CARD="))).unwrap_or(false)
+    })
+    .filter_map(|d| device_name(&d).map(|n| (n, d)))
+    .collect()
+}
+
+pub(super) fn devices() -> Vec<String> {
+    listed(&cpal::default_host()).into_iter().map(|(n, _)| n).collect()
+}
+
+/// The device with this name; the system default when the name is empty or the device is gone.
+fn open_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    if !name.is_empty() {
+        if let Some((_, d)) = listed(host).into_iter().find(|(n, _)| n == name) {
+            return Some(d);
+        }
+        crate::log::write(&format!("microphone \"{name}\" not found, using the default one"));
+    }
+    host.default_input_device()
+}
+
+pub(super) fn capture(
+    stop: Arc<AtomicBool>,
+    ready: mpsc::Sender<Result<(), String>>,
+    max_samples: usize,
+    device: &str,
+) -> CaptureResult {
     let fail = |msg: String| {
         let _ = ready.send(Err(msg.clone()));
         Err(msg)
     };
     let host = cpal::default_host();
-    let Some(dev) = host.default_input_device() else {
+    let Some(dev) = open_device(&host, device) else {
         return fail("no microphone found".into());
     };
     let cfg = match dev.default_input_config() {

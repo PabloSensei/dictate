@@ -79,6 +79,7 @@ const CARD_W: f32 = 520.0;
 const ROW_PAD: f32 = 16.0;
 const MODE_W: f32 = 214.0;
 const BUBBLE_W: f32 = 252.0;
+const MIC_W: f32 = 252.0;
 const POPUP_W: f32 = 180.0;
 const SEARCH_W: f32 = 210.0;
 
@@ -133,7 +134,7 @@ impl Page {
     fn sections(self) -> &'static [(T, &'static [RowKind])] {
         match self {
             Page::General => &[
-                (T::SecControls, &[RowKind::Key, RowKind::Mode]),
+                (T::SecControls, &[RowKind::Key, RowKind::Mode, RowKind::Mic]),
                 (T::Bubble, &[RowKind::Bubble, RowKind::Live]),
             ],
             Page::Recognition => &[
@@ -162,6 +163,7 @@ enum Hit {
     UiLang,
     Autostart,
     HistoryMode,
+    Mic,
     Copy(usize),
     Clear,
     File,
@@ -182,11 +184,12 @@ enum RowKind {
     UiLang,
     Autostart,
     HistoryMode,
+    Mic,
 }
 
 fn row_h(k: RowKind) -> f32 {
     match k {
-        RowKind::Key | RowKind::Mode | RowKind::Live | RowKind::Clipboard | RowKind::HistoryMode => 60.0,
+        RowKind::Key | RowKind::Mode | RowKind::Live | RowKind::Clipboard | RowKind::HistoryMode | RowKind::Mic => 60.0,
         RowKind::Prompt => 118.0,
         _ => 48.0,
     }
@@ -403,6 +406,8 @@ struct St {
     space: bool,
     clipboard: bool,
     history_mode: history::Mode,
+    /// Microphone name, "" = system default.
+    mic: String,
     ui_lang: String,
     ui_lang_before: Lang,
     /// Lives in the registry (HKCU Run), not in dictate.ini.
@@ -639,6 +644,7 @@ unsafe fn create(cfg: &Config, cfg_path: PathBuf, on_saved: fn(), page: Page) {
             space: cfg.append_space,
             clipboard: cfg.clipboard,
             history_mode: cfg.history,
+            mic: cfg.microphone.clone(),
             ui_lang: cfg.ui_language.clone(),
             ui_lang_before: ui_before,
             autostart: auto_on,
@@ -711,6 +717,18 @@ fn history_options() -> Vec<(String, String)> {
         .iter()
         .map(|(m, l)| (m.as_str().to_string(), t(*l).to_string()))
         .collect()
+}
+
+/// "" = system default, then the microphones connected now; a chosen one that isn't
+/// connected stays in the list, marked, so it isn't silently dropped.
+fn mic_options(current: &str) -> Vec<(String, String)> {
+    let mut v = vec![(String::new(), t(T::MicDefault).to_string())];
+    let devices = dictate::audio::input_devices();
+    if !current.is_empty() && !devices.iter().any(|d| d == current) {
+        v.push((current.to_string(), format!("{current} ({})", t(T::MicMissing))));
+    }
+    v.extend(devices.into_iter().map(|d| (d.clone(), d)));
+    v
 }
 
 fn label_of(options: &[(String, String)], code: &str) -> String {
@@ -959,6 +977,7 @@ impl St {
                     RowKind::Live => (t(T::Live), Some(t(T::LiveSub).to_string())),
                     RowKind::UiLang => (t(T::UiLang), None),
                     RowKind::Autostart => (t(T::Autostart), None),
+                    RowKind::Mic => (t(T::Microphone), Some(t(T::MicrophoneSub).to_string())),
                     RowKind::HistoryMode => (
                         t(T::HistoryMode),
                         Some(
@@ -978,6 +997,7 @@ impl St {
                     RowKind::Mode => MODE_W,
                     RowKind::Bubble => BUBBLE_W,
                     RowKind::SpeechLang | RowKind::UiLang | RowKind::HistoryMode => POPUP_W,
+                    RowKind::Mic => MIC_W,
                     RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard => 42.0,
                     RowKind::Prompt => 0.0,
                 };
@@ -1038,6 +1058,13 @@ impl St {
                         let r = Rect { x: right - POPUP_W, y: cy - 14.0, w: POPUP_W, h: 28.0 };
                         popup_button(cv, texts, th, &self.fonts, r, &label, self.tint(th.chip, hit));
                         hits.push((hit, r));
+                    }
+                    RowKind::Mic => {
+                        // no device listing while painting: the label comes from the setting alone
+                        let label = if self.mic.is_empty() { t(T::MicDefault).to_string() } else { self.mic.clone() };
+                        let r = Rect { x: right - MIC_W, y: cy - 14.0, w: MIC_W, h: 28.0 };
+                        popup_button(cv, texts, th, &self.fonts, r, &label, self.tint(th.chip, Hit::Mic));
+                        hits.push((Hit::Mic, r));
                     }
                     RowKind::Space | RowKind::Live | RowKind::Autostart | RowKind::Clipboard => {
                         let (hit, v) = match row {
@@ -1443,7 +1470,7 @@ impl St {
                 return Action::None;
             }
             Hit::Clear => return Action::ClearHistory,
-            Hit::SpeechLang | Hit::UiLang | Hit::HistoryMode => return Action::Popup(hit),
+            Hit::SpeechLang | Hit::UiLang | Hit::HistoryMode | Hit::Mic => return Action::Popup(hit),
             Hit::File => return Action::OpenFile,
             Hit::Cancel => return Action::Close,
             Hit::Save => return Action::Save,
@@ -1456,6 +1483,7 @@ impl St {
         match hit {
             Hit::SpeechLang => self.speech = code,
             Hit::HistoryMode => self.history_mode = history::Mode::parse(&code).unwrap_or(self.history_mode),
+            Hit::Mic => self.mic = code,
             _ => {
                 self.ui_lang = code;
                 i18n::set(i18n::resolve(&self.ui_lang)); // preview right away
@@ -1474,6 +1502,7 @@ impl St {
         match hit {
             Hit::SpeechLang => (self.speech.clone(), speech_options()),
             Hit::HistoryMode => (self.history_mode.as_str().to_string(), history_options()),
+            Hit::Mic => (self.mic.clone(), mic_options(&self.mic)),
             _ => (self.ui_lang.clone(), ui_options()),
         }
     }
@@ -1485,13 +1514,14 @@ fn popup_menu(hwnd: HWND, scale: f32, r: Rect, options: &[(String, String)], cur
     unsafe {
         let menu = CreatePopupMenu();
         for (i, (code, label)) in options.iter().enumerate() {
-            if code == "auto" && i > 0 {
+            let system = code == "auto" || code.is_empty();
+            if system && i > 0 {
                 AppendMenuW(menu, MF_SEPARATOR, 0, null());
             }
-            let w = wide(label);
+            let w = wide(&label.replace('&', "&&")); // device names may contain '&'
             let flags = MF_STRING | if code == current { MF_CHECKED } else { 0 };
             AppendMenuW(menu, flags, i + 1, w.as_ptr());
-            if code == "auto" && i == 0 {
+            if system && i == 0 {
                 AppendMenuW(menu, MF_SEPARATOR, 0, null());
             }
         }
@@ -1558,6 +1588,7 @@ impl St {
                 ("append_space", self.space.to_string()),
                 ("clipboard", self.clipboard.to_string()),
                 ("history", self.history_mode.as_str().to_string()),
+                ("microphone", self.mic.clone()),
                 ("ui_language", self.ui_lang.clone()),
                 ("prompt", prompt),
             ],
